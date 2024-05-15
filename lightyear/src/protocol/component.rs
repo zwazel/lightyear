@@ -46,7 +46,6 @@ use crate::shared::events::connection::{
 use crate::shared::replication::components::ShouldBePredicted;
 use crate::shared::replication::components::{PrePredicted, ShouldBeInterpolated};
 use crate::shared::replication::entity_map::EntityMap;
-use crate::shared::replication::systems::register_replicate_component_send;
 use crate::shared::replication::ReplicationSend;
 use crate::shared::sets::InternalMainSet;
 
@@ -60,12 +59,14 @@ pub type ComponentNetId = NetId;
 /// You register components by calling the [`register_component`](AppComponentExt::register_component) method directly on the App.
 /// You can provide a [`ChannelDirection`] to specify if the component should be sent from the client to the server, from the server to the client, or both.
 ///
+/// A component needs to implement the `Serialize`, `Deserialize` and `PartialEq` traits.
+///
 /// ```rust
 /// use bevy::prelude::*;
 /// use serde::{Deserialize, Serialize};
 /// use lightyear::prelude::*;
 ///
-/// #[derive(Component, Serialize, Deserialize)]
+/// #[derive(Component, PartialEq, Serialize, Deserialize)]
 /// struct MyComponent;
 ///
 /// fn add_components(app: &mut App) {
@@ -164,7 +165,7 @@ pub struct PredictionMetadata {
 
 impl PredictionMetadata {
     fn default_from<C: PartialEq>(mode: ComponentSyncMode) -> Self {
-        let should_rollback: RollbackCheckFn<C> = <C as PartialEq>::ne;
+        let should_rollback: ShouldRollbackFn<C> = <C as PartialEq>::ne;
         Self {
             prediction_mode: mode,
             correction: None,
@@ -193,9 +194,9 @@ type RawWriteFn = fn(
 /// t goes from 0.0 (`start`) to 1.0 (`other`)
 pub type LerpFn<C> = fn(start: &C, other: &C, t: f32) -> C;
 
-/// Function used to check if a rollback is needed, by comparing the server's value with the client's predicted value.
-/// Defaults to PartialEq::eq
-type RollbackCheckFn<C> = fn(this: &C, that: &C) -> bool;
+/// Function that returns true if a rollback is needed, by comparing the server's value with the client's predicted value.
+/// Defaults to PartialEq::ne
+type ShouldRollbackFn<C> = fn(this: &C, that: &C) -> bool;
 
 pub trait Linear {
     fn lerp(start: &Self, other: &Self, t: f32) -> Self;
@@ -247,7 +248,7 @@ impl ComponentRegistry {
         }
     }
 
-    pub(crate) fn register_component<C: Component + Message>(&mut self) {
+    pub(crate) fn register_component<C: Component + Message + PartialEq>(&mut self) {
         let component_kind = self.kind_map.add::<C>();
         self.serialize_fns_map
             .insert(component_kind, ErasedSerializeFns::new::<C>());
@@ -283,15 +284,15 @@ impl ComponentRegistry {
             .or_insert_with(|| PredictionMetadata::default_from::<C>(mode));
     }
 
-    pub(crate) fn set_rollback_check<C: Component + PartialEq>(
+    pub(crate) fn set_should_rollback<C: Component + PartialEq>(
         &mut self,
-        rollback_check: RollbackCheckFn<C>,
+        should_rollback: ShouldRollbackFn<C>,
     ) {
         let kind = ComponentKind::of::<C>();
         self.prediction_map
             .entry(kind)
             .or_insert_with(|| PredictionMetadata::default_from::<C>(ComponentSyncMode::Full))
-            .should_rollback = unsafe { std::mem::transmute(rollback_check) };
+            .should_rollback = unsafe { std::mem::transmute(should_rollback) };
     }
 
     pub(crate) fn set_linear_correction<C: Component + Linear + PartialEq>(&mut self) {
@@ -419,9 +420,9 @@ impl ComponentRegistry {
             .get(&kind)
             .context("the component is not part of the protocol")
             .unwrap();
-        let rollback_check_fn: RollbackCheckFn<C> =
+        let should_rollback_fn: ShouldRollbackFn<C> =
             unsafe { std::mem::transmute(prediction_metadata.should_rollback) };
-        rollback_check_fn(this, that)
+        should_rollback_fn(this, that)
     }
 
     pub(crate) fn correct<C: Component>(&self, predicted: &C, corrected: &C, t: f32) -> C {
@@ -468,7 +469,7 @@ impl ComponentRegistry {
         (replication_metadata.write)(self, reader, net_id, entity_world_mut, entity_map, events)
     }
 
-    pub(crate) fn write<C: Component>(
+    pub(crate) fn write<C: Component + PartialEq>(
         &self,
         reader: &mut BitcodeReader,
         net_id: ComponentNetId,
@@ -483,9 +484,11 @@ impl ComponentRegistry {
         let tick = Tick(0);
         // TODO: should we send the event based on on the message type (Insert/Update) or based on whether the component was actually inserted?
         if let Some(mut c) = entity_world_mut.get_mut::<C>() {
-            events.push_update_component(entity, net_id, tick);
-            // TODO: use set_if_neq for PartialEq
-            *c = component;
+            // only apply the update if the component is different, to not trigger change detection
+            if c.as_ref() != &component {
+                events.push_update_component(entity, net_id, tick);
+                *c = component;
+            }
         } else {
             events.push_insert_component(entity, net_id, tick);
             entity_world_mut.insert(component);
@@ -513,7 +516,7 @@ fn register_component_send<C: Component>(app: &mut App, direction: ChannelDirect
     match direction {
         ChannelDirection::ClientToServer => {
             if is_client {
-                register_replicate_component_send::<C, client::ConnectionManager>(app);
+                crate::client::replication::send::register_replicate_component_send::<C>(app);
             }
             if is_server {
                 debug!(
@@ -525,7 +528,7 @@ fn register_component_send<C: Component>(app: &mut App, direction: ChannelDirect
         }
         ChannelDirection::ServerToClient => {
             if is_server {
-                register_replicate_component_send::<C, server::ConnectionManager>(app);
+                crate::server::replication::send::register_replicate_component_send::<C>(app);
             }
             if is_client {
                 debug!(
@@ -546,7 +549,7 @@ fn register_component_send<C: Component>(app: &mut App, direction: ChannelDirect
 pub trait AppComponentExt {
     /// Registers the component in the Registry
     /// This component can now be sent over the network.
-    fn register_component<C: Component + Message>(
+    fn register_component<C: Component + Message + PartialEq>(
         &mut self,
         direction: ChannelDirection,
     ) -> ComponentRegistration<'_, C>;
@@ -562,9 +565,10 @@ pub trait AppComponentExt {
     fn add_correction_fn<C: SyncComponent>(&mut self, correction_fn: LerpFn<C>);
 
     /// Add a custom function to use for checking if a rollback is needed.
-    /// (By default we use the PartialEq::eq function, but you can use this to override the
+    ///
+    /// (By default we use the PartialEq::ne function, but you can use this to override the
     ///  equality check. For example, you might want to add a threshold for floating point numbers)
-    fn add_rollback_check<C: SyncComponent>(&mut self, rollback_check: RollbackCheckFn<C>);
+    fn add_should_rollback_fn<C: SyncComponent>(&mut self, should_rollback: ShouldRollbackFn<C>);
 
     /// Register helper systems to perform interpolation for the component; but the user has to define the interpolation logic
     /// themselves (the interpolation_fn will not be used)
@@ -627,13 +631,14 @@ impl<C> ComponentRegistration<'_, C> {
     }
 
     /// Add a custom function to use for checking if a rollback is needed.
-    /// (By default we use the PartialEq::eq function, but you can use this to override the
+    ///
+    /// (By default we use the PartialEq::ne function, but you can use this to override the
     ///  equality check. For example, you might want to add a threshold for floating point numbers)
-    pub fn add_rollback_check(self, rollback_check: RollbackCheckFn<C>) -> Self
+    pub fn add_should_rollback(self, should_rollback: ShouldRollbackFn<C>) -> Self
     where
         C: SyncComponent,
     {
-        self.app.add_rollback_check::<C>(rollback_check);
+        self.app.add_should_rollback_fn::<C>(should_rollback);
         self
     }
 
@@ -677,7 +682,7 @@ impl<C> ComponentRegistration<'_, C> {
 }
 
 impl AppComponentExt for App {
-    fn register_component<C: Component + Message>(
+    fn register_component<C: Component + Message + PartialEq>(
         &mut self,
         direction: ChannelDirection,
     ) -> ComponentRegistration<'_, C> {
@@ -715,9 +720,9 @@ impl AppComponentExt for App {
         registry.set_correction::<C>(correction_fn);
     }
 
-    fn add_rollback_check<C: SyncComponent>(&mut self, rollback_check: RollbackCheckFn<C>) {
+    fn add_should_rollback_fn<C: SyncComponent>(&mut self, rollback_check: ShouldRollbackFn<C>) {
         let mut registry = self.world.resource_mut::<ComponentRegistry>();
-        registry.set_rollback_check::<C>(rollback_check);
+        registry.set_should_rollback::<C>(rollback_check);
     }
 
     fn add_custom_interpolation<C: SyncComponent>(

@@ -4,6 +4,8 @@ use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use lightyear::client::components::{ComponentSyncMode, LerpFn};
+use lightyear::prelude::client::Replicate;
+use lightyear::prelude::server::SyncTarget;
 use lightyear::prelude::*;
 use lightyear::shared::replication::components::ReplicationGroupIdBuilder;
 use lightyear::utils::bevy::*;
@@ -42,9 +44,7 @@ impl PlayerBundle {
             replicate: Replicate {
                 // NOTE (important): all entities that are being predicted need to be part of the same replication-group
                 //  so that all their updates are sent as a single message and are consistent (on the same tick)
-                replication_group: ReplicationGroup::new_id(id.to_bits()),
-                // For HostServer mode, remember to also set prediction/interpolation targets for other clients
-                interpolation_target: NetworkTarget::AllExceptSingle(id),
+                group: ReplicationGroup::new_id(id.to_bits()),
                 ..default()
             },
             inputs: InputManagerBundle::<PlayerActions> {

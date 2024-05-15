@@ -107,52 +107,57 @@ fn delete_player(
 // And we want to handle deletion properly
 pub(crate) fn replicate_players(
     mut commands: Commands,
-    mut player_spawn_reader: EventReader<ComponentInsertEvent<PlayerPosition>>,
+    replicated_players: Query<(Entity, &Replicated), (With<PlayerPosition>, Added<Replicated>)>,
 ) {
-    for event in player_spawn_reader.read() {
-        debug!("received player spawn event: {:?}", event);
-        let client_id = event.context();
-        let entity = event.entity();
-
+    for (entity, replicated) in replicated_players.iter() {
+        let client_id = replicated.client_id();
+        debug!("received player spawn event from {client_id:?}");
         // for all cursors we have received, add a Replicate component so that we can start replicating it
         // to other clients
         if let Some(mut e) = commands.get_entity(entity) {
-            let mut replicate = Replicate {
-                // we want to replicate back to the original client, since they are using a pre-spawned entity
-                replication_target: NetworkTarget::All,
-                // NOTE: even with a pre-spawned Predicted entity, we need to specify who will run prediction
-                // NOTE: Be careful to not override the pre-spawned prediction! we do not need to enable prediction
-                //  because there is a pre-spawned predicted entity
-                prediction_target: NetworkTarget::Only(vec![*client_id]),
-                // we want the other clients to apply interpolation for the player
-                interpolation_target: NetworkTarget::AllExcept(vec![*client_id]),
+            let replicate = Replicate {
+                target: ReplicationTarget {
+                    // we want to replicate back to the original client, since they are using a pre-spawned entity
+                    target: NetworkTarget::All,
+                },
+                sync: SyncTarget {
+                    // NOTE: even with a pre-spawned Predicted entity, we need to specify who will run prediction
+                    prediction: NetworkTarget::Single(client_id),
+                    // we want the other clients to apply interpolation for the player
+                    interpolation: NetworkTarget::AllExceptSingle(client_id),
+                },
                 ..default()
             };
-            // if we receive a pre-predicted entity, only send the prepredicted component back
-            // to the original client
-            replicate.add_target::<PrePredicted>(NetworkTarget::Single(*client_id));
-            e.insert(replicate);
+            e.insert((
+                replicate,
+                // if we receive a pre-predicted entity, only send the prepredicted component back
+                // to the original client
+                OverrideTargetComponent::<PrePredicted>::new(NetworkTarget::Single(client_id)),
+            ));
         }
     }
 }
 
 pub(crate) fn replicate_cursors(
     mut commands: Commands,
-    mut cursor_spawn_reader: EventReader<ComponentInsertEvent<CursorPosition>>,
+    replicated_cursor: Query<(Entity, &Replicated), (With<CursorPosition>, Added<Replicated>)>,
 ) {
-    for event in cursor_spawn_reader.read() {
-        info!("received cursor spawn event: {:?}", event);
-        let client_id = event.context();
-        let entity = event.entity();
-
+    for (entity, replicated) in replicated_cursor.iter() {
+        let client_id = replicated.client_id();
+        info!("received cursor spawn event from client: {client_id:?}");
         // for all cursors we have received, add a Replicate component so that we can start replicating it
         // to other clients
         if let Some(mut e) = commands.get_entity(entity) {
             e.insert(Replicate {
-                // do not replicate back to the owning entity!
-                replication_target: NetworkTarget::AllExcept(vec![*client_id]),
-                // we want the other clients to apply interpolation for the cursor
-                interpolation_target: NetworkTarget::AllExcept(vec![*client_id]),
+                target: ReplicationTarget {
+                    // do not replicate back to the client that owns the cursor!
+                    target: NetworkTarget::AllExceptSingle(client_id),
+                },
+                sync: SyncTarget {
+                    // we want the other clients to apply interpolation for the cursor
+                    interpolation: NetworkTarget::AllExceptSingle(client_id),
+                    ..default()
+                },
                 ..default()
             });
         }

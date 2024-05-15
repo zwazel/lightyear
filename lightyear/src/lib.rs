@@ -9,7 +9,7 @@ You can find more information in the [book](https://cbournhonesque.github.io/lig
 
 ### Install the plugins
 
-`lightyear` provides two plugins: [`ServerPlugin`](prelude::server::ServerPlugins) and [`ClientPlugin`](prelude::client::ClientPlugins) that will handle the networking for you.
+`lightyear` provides two plugins groups: [`ServerPlugins`](prelude::server::ServerPlugins) and [`ClientPlugins`](prelude::client::ClientPlugins) that will handle the networking for you.
 
 ```rust
 use bevy::utils::Duration;
@@ -41,6 +41,12 @@ how the client and server will communicate.
 The [`Protocol`](protocol) is the set of types that can be sent over the network.
 You will have to define your protocol in a shared module that is accessible to both the client and the server,
 since the protocol must be shared between them.
+
+There are several steps:
+- [Adding messages](MessageRegistry#adding-messages)
+- [Adding components](ComponentRegistry#adding-components)
+- [Adding channels](ChannelRegistry#adding-channels)
+- [Adding leafwing inputs](client::input_leafwing#adding-leafwing-inputs) or [Adding inputs](client::input#adding-a-new-input-type)
 
 ## Using lightyear
 
@@ -103,11 +109,17 @@ fn receive_message(mut message_reader: EventReader<MessageEvent<MyMessage>>) {
 
 ### Starting replication
 
-To replicate an entity from the local world to the remote world, you can just add the [`Replicate`] component to the entity.
-The [`Replicate`] component has many options to customize how the entity is replicated.
+To replicate an entity from the local world to the remote world, you can just add the [`Replicate`](prelude::server::Replicate) bundle to the entity.
+The [`Replicate`](prelude::server::Replicate) bundle contains many components to customize how the entity is replicated.
 
-You can remove the [`Replicate`] component to stop the replication. This will not despawn the entity on the remote world; it will simply
+The marker component [`Replicating`] indicates that the entity is getting replicated to a remote peer.
+You can remove the [`Replicating`] component to pause the replication. This will not despawn the entity on the remote world; it will simply
 stop sending replication updates.
+
+In contrast, the [`ReplicationTarget`] component is used to indicate which clients you want to replicate this entity to.
+If you update the target to exclude a given client, the entity will get despawned on that client.
+
+On the receiver side, entities that are replicated from a remote peer will have the [`Replicated`] marker component.
 
 
 ### Reacting to replication events
@@ -190,11 +202,13 @@ pub mod prelude {
     pub use crate::shared::ping::manager::PingConfig;
     pub use crate::shared::plugin::{NetworkIdentity, SharedPlugin};
     pub use crate::shared::replication::components::{
-        NetworkTarget, PrePredicted, Replicate, Replicated, ReplicationGroup, ShouldBePredicted,
-        TargetEntity, VisibilityMode,
+        DisabledComponent, OverrideTargetComponent, PrePredicted, ReplicateHierarchy,
+        ReplicateOnceComponent, Replicated, Replicating, ReplicationGroup, ReplicationTarget,
+        ShouldBePredicted, TargetEntity, VisibilityMode,
     };
     pub use crate::shared::replication::entity_map::RemoteEntityMap;
     pub use crate::shared::replication::hierarchy::ParentSync;
+    pub use crate::shared::replication::network_target::NetworkTarget;
     pub use crate::shared::replication::resources::{
         ReplicateResourceExt, ReplicateResourceMetadata, StopReplicateResourceExt,
     };
@@ -235,6 +249,8 @@ pub mod prelude {
         pub use crate::client::prediction::plugin::{PredictionConfig, PredictionSet};
         pub use crate::client::prediction::rollback::{Rollback, RollbackState};
         pub use crate::client::prediction::Predicted;
+        pub use crate::client::replication::commands::DespawnReplicationCommandExt;
+        pub use crate::client::replication::send::Replicate;
         pub use crate::client::sync::SyncConfig;
         pub use crate::connection::client::{
             Authentication, ClientConnection, IoConfig, NetClient, NetConfig,
@@ -262,7 +278,11 @@ pub mod prelude {
         pub use crate::server::io::Io;
         pub use crate::server::networking::{NetworkingState, ServerCommands};
         pub use crate::server::plugin::ServerPlugins;
-        pub use crate::server::replication::{ServerFilter, ServerReplicationSet};
+        pub use crate::server::replication::commands::DespawnReplicationCommandExt;
+        pub use crate::server::replication::{
+            send::{ControlledBy, Replicate, ServerFilter, SyncTarget, Visibility},
+            ServerReplicationSet,
+        };
         pub use crate::server::visibility::immediate::VisibilityManager;
         pub use crate::server::visibility::room::{RoomId, RoomManager};
     }

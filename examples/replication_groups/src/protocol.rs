@@ -12,6 +12,7 @@ use tracing::{debug, info, trace};
 
 use lightyear::client::components::ComponentSyncMode;
 use lightyear::prelude::client::LerpFn;
+use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use lightyear::shared::replication::components::ReplicationGroup;
 
@@ -45,11 +46,15 @@ impl PlayerBundle {
             position: PlayerPosition(position),
             color: PlayerColor(color),
             replicate: Replicate {
-                prediction_target: NetworkTarget::Single(id),
-                interpolation_target: NetworkTarget::AllExceptSingle(id),
-                controlled_by: NetworkTarget::Single(id),
+                sync: SyncTarget {
+                    prediction: NetworkTarget::Single(id),
+                    interpolation: NetworkTarget::AllExceptSingle(id),
+                },
+                controlled_by: ControlledBy {
+                    target: NetworkTarget::Single(id),
+                },
                 // the default is: the replication group id is a u64 value generated from the entity (`entity.to_bits()`)
-                replication_group: ReplicationGroup::default(),
+                group: ReplicationGroup::default(),
                 ..default()
             },
         }
@@ -67,11 +72,15 @@ impl TailBundle {
             points: TailPoints(points),
             length: TailLength(length),
             replicate: Replicate {
-                controlled_by: NetworkTarget::Single(id),
-                prediction_target: NetworkTarget::Single(id),
-                interpolation_target: NetworkTarget::AllExceptSingle(id),
+                sync: SyncTarget {
+                    prediction: NetworkTarget::Single(id),
+                    interpolation: NetworkTarget::AllExceptSingle(id),
+                },
+                controlled_by: ControlledBy {
+                    target: NetworkTarget::Single(id),
+                },
                 // replicate this entity within the same replication group as the parent
-                replication_group: ReplicationGroup::default().set_id(parent.to_bits()),
+                group: ReplicationGroup::default().set_id(parent.to_bits()),
                 ..default()
             },
         }

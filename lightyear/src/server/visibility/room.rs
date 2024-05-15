@@ -54,7 +54,7 @@ use crate::server::connection::ConnectionManager;
 
 use crate::server::networking::is_started;
 use crate::server::visibility::immediate::{VisibilityManager, VisibilitySet};
-use crate::shared::replication::components::{DespawnTracker, Replicate};
+use crate::shared::replication::components::DespawnTracker;
 use crate::shared::replication::ReplicationSend;
 use crate::shared::sets::{InternalMainSet, InternalReplicationSet, ServerMarker};
 use crate::shared::time_manager::is_server_ready_to_send;
@@ -521,11 +521,14 @@ mod tests {
     use bevy::utils::HashMap;
 
     use crate::prelude::client::*;
+    use crate::prelude::server::Replicate;
     use crate::prelude::*;
-    use crate::server::visibility::immediate::systems::update_visibility_from_events;
+    use crate::server::replication::send::handle_replicating_add;
+    use crate::server::visibility::immediate::systems::{
+        add_replicate_visibility, update_visibility_from_events,
+    };
     use crate::server::visibility::immediate::{ClientVisibility, ReplicateVisibility};
     use crate::shared::replication::components::VisibilityMode;
-    use crate::shared::replication::systems::handle_replicate_add;
     use crate::tests::stepper::{BevyStepper, Step};
 
     use super::systems::buffer_room_visibility_events;
@@ -559,7 +562,7 @@ mod tests {
         stepper
             .server_app
             .world
-            .run_system_once(handle_replicate_add::<server::ConnectionManager>);
+            .run_system_once(handle_replicating_add);
 
         stepper.frame_step();
         stepper.frame_step();
@@ -730,7 +733,7 @@ mod tests {
         stepper
             .server_app
             .world
-            .run_system_once(handle_replicate_add::<server::ConnectionManager>);
+            .run_system_once(handle_replicating_add);
         stepper
             .server_app
             .world
@@ -904,7 +907,7 @@ mod tests {
         stepper
             .server_app
             .world
-            .run_system_once(handle_replicate_add::<server::ConnectionManager>);
+            .run_system_once(add_replicate_visibility);
         stepper
             .server_app
             .world
@@ -1018,7 +1021,7 @@ mod tests {
         stepper
             .server_app
             .world
-            .run_system_once(handle_replicate_add::<server::ConnectionManager>);
+            .run_system_once(add_replicate_visibility);
         stepper
             .server_app
             .world
@@ -1115,7 +1118,7 @@ mod tests {
         stepper
             .server_app
             .world
-            .run_system_once(handle_replicate_add::<server::ConnectionManager>);
+            .run_system_once(add_replicate_visibility);
         stepper
             .server_app
             .world
