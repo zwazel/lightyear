@@ -19,6 +19,7 @@ use crate::client::prediction::plugin::PredictionPlugin;
 use crate::client::replication::{
     receive::ClientReplicationReceivePlugin, send::ClientReplicationSendPlugin,
 };
+use crate::connection::client::NetConfig;
 use crate::prelude::server::{ServerConfig, ServerPlugins};
 use crate::shared::config::Mode;
 use crate::shared::plugin::SharedPlugin;
@@ -77,7 +78,10 @@ impl Plugin for SetupPlugin {
     fn build(&self, app: &mut App) {
         app
             // RESOURCES //
-            .insert_resource(self.config.clone());
+            .insert_resource(self.config.clone())
+            // REFLECT DATA TYPES //
+            .register_type::<NetConfig>()
+            .register_type::<ClientConfig>();
 
         // TODO: how do we make sure that SharedPlugin is only added once if we want to switch between
         //  HostServer and Separate mode?

@@ -76,7 +76,6 @@ pub type IoConfig = SharedIoConfig<ClientTransport>;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Reflect)]
-#[reflect(from_reflect = false)]
 pub enum NetConfig {
     Netcode {
         #[reflect(ignore)]
