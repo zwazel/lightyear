@@ -110,9 +110,7 @@ impl NetConfig {
                     conditioner,
                 )
                 .expect("could not create steam server");
-                ServerConnection {
-                    server: Box::new(server),
-                }
+                ServerConnection::Steam(server)
             }
         }
     }
