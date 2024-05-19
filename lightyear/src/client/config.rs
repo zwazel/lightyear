@@ -13,7 +13,7 @@ use crate::connection::client::NetConfig;
 use crate::shared::config::{Mode, SharedConfig};
 use crate::shared::ping::manager::PingConfig;
 
-#[derive(Clone, Reflect)]
+#[derive(Clone, Debug, Reflect)]
 /// Config related to the netcode protocol (abstraction of a connection over raw UDP-like transport)
 pub struct NetcodeConfig {
     pub num_disconnect_packets: usize,

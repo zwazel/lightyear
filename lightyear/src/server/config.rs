@@ -1,5 +1,7 @@
 //! Defines server-specific configuration options
+use bevy::ecs::reflect::ReflectResource;
 use bevy::prelude::Resource;
+use bevy::reflect::Reflect;
 use governor::Quota;
 use nonzero_ext::nonzero;
 
@@ -8,7 +10,7 @@ use crate::connection::server::NetConfig;
 use crate::shared::config::SharedConfig;
 use crate::shared::ping::manager::PingConfig;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Reflect)]
 pub struct NetcodeConfig {
     pub num_disconnect_packets: usize,
     pub keep_alive_send_rate: f64,
@@ -86,12 +88,14 @@ impl PacketConfig {
 }
 
 /// Configuration for the server plugin
-#[derive(Clone, Debug, Default, Resource)]
+#[derive(Clone, Debug, Default, Reflect, Resource)]
+#[reflect(Resource)]
 pub struct ServerConfig {
     pub shared: SharedConfig,
     /// The server can support multiple transport at the same time (e.g. UDP and WebTransport) so that
     /// clients can connect using the transport they prefer, and still play with each other!
     pub net: Vec<NetConfig>,
+    #[reflect(ignore)]
     pub packet: PacketConfig,
     pub ping: PingConfig,
 }

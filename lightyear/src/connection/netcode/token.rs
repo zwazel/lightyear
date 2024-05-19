@@ -304,7 +304,7 @@ impl Bytes for ChallengeToken {
 /// ```
 ///
 /// Alternatively, you can use [`Server::token`](crate::connection::netcode::server::NetcodeServer::token) to generate a connect token from an already existing [`Server`](crate::connection::netcode::server::NetcodeServer).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ConnectToken {
     pub(crate) version_info: [u8; NETCODE_VERSION.len()],
     pub(crate) protocol_id: u64,

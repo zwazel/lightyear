@@ -8,6 +8,7 @@
 //! while keeping the rest of the features intact.
 //!
 //! Most plugins are truly necessary for the server functionality to work properly, but some could be disabled.
+use crate::connection::server::NetConfig;
 use crate::server::clients::ClientsMetadataPlugin;
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
@@ -72,7 +73,10 @@ impl Plugin for SetupPlugin {
     fn build(&self, app: &mut App) {
         app
             // RESOURCES //
-            .insert_resource(self.config.clone());
+            .insert_resource(self.config.clone())
+            // REFLECTION TYPE DATA //
+            .register_type::<NetConfig>()
+            .register_type::<ServerConfig>();
         // PLUGINS
         // NOTE: SharedPlugin needs to be added after config
         if !app.is_plugin_added::<SharedPlugin>() {

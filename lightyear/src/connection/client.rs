@@ -75,7 +75,7 @@ pub struct ClientConnection {
 pub type IoConfig = SharedIoConfig<ClientTransport>;
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Reflect)]
+#[derive(Clone, Debug, Reflect)]
 #[reflect(from_reflect = false)]
 pub enum NetConfig {
     Netcode {
@@ -221,6 +221,7 @@ impl NetClient for ClientConnection {
 /// establish secure connection.
 /// - when testing, it can be convenient for the client to create its own `ConnectToken` manually.
 /// You can use `Authentication::Manual` for those cases.
+#[derive(Debug)]
 pub enum Authentication {
     /// Use a `ConnectToken` to authenticate with the game server.
     ///

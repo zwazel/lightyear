@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use bevy::prelude::Resource;
+use bevy::reflect::Reflect;
 use bevy::utils::HashMap;
 use enum_dispatch::enum_dispatch;
 use std::net::SocketAddr;
@@ -63,15 +64,18 @@ pub enum ServerConnection {
 pub type IoConfig = SharedIoConfig<ServerTransport>;
 
 /// Configuration for the server connection
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Reflect)]
 pub enum NetConfig {
     Netcode {
         config: NetcodeConfig,
+        #[reflect(ignore)]
         io: IoConfig,
     },
     #[cfg(all(feature = "steam", not(target_family = "wasm")))]
     Steam {
+        #[reflect(ignore)]
         steamworks_client: Option<Arc<RwLock<SteamworksClient>>>,
+        #[reflect(ignore)]
         config: SteamConfig,
         conditioner: Option<LinkConditionerConfig>,
     },
