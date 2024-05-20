@@ -1,7 +1,6 @@
 //! Defines server-specific configuration options
+use bevy::prelude::{Reflect, Resource};
 use bevy::ecs::reflect::ReflectResource;
-use bevy::prelude::Resource;
-use bevy::reflect::Reflect;
 use governor::Quota;
 use nonzero_ext::nonzero;
 
@@ -53,6 +52,11 @@ impl NetcodeConfig {
 /// Configuration related to sending packets
 #[derive(Clone, Debug)]
 pub struct PacketConfig {
+    /// After how many multiples of RTT do we consider a packet to be lost?
+    ///
+    /// The default is 1.5; i.e. after 1.5 times the round trip time, we consider a packet lost if
+    /// we haven't received an ACK for it.
+    pub nack_rtt_multiple: f32,
     /// Number of bytes per second that can be sent to each client
     pub per_client_send_bandwidth_cap: Quota,
     /// If false, there is no bandwidth cap and all messages are sent as soon as possible
@@ -62,6 +66,7 @@ pub struct PacketConfig {
 impl Default for PacketConfig {
     fn default() -> Self {
         Self {
+            nack_rtt_multiple: 1.5,
             // 56 KB/s bandwidth cap
             per_client_send_bandwidth_cap: Quota::per_second(nonzero!(56000u32)),
             bandwidth_cap_enabled: false,
@@ -87,6 +92,22 @@ impl PacketConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Reflect)]
+pub struct ReplicationConfig {
+    /// By default, we will send all component updates since the last time we sent an update for a given entity.
+    /// E.g. if the component was updated at tick 3; we will send the update at tick 3, and then at tick 4,
+    /// we won't be sending anything since the component wasn't updated after that.
+    ///
+    /// This helps save bandwidth, but can cause the client to have delayed eventual consistency in the
+    /// case of packet loss.
+    ///
+    /// If this is set to true, we will instead send all updates since the last time we received an ACK from the client.
+    /// E.g. if the component was updated at tick 3; we will send the update at tick 3, and then at tick 4,
+    /// we will send the update again even if the component wasn't updated, because we still haven't
+    /// received an ACK from the client.
+    pub send_updates_since_last_ack: bool,
+}
+
 /// Configuration for the server plugin
 #[derive(Clone, Debug, Default, Reflect, Resource)]
 #[reflect(Resource)]
@@ -97,5 +118,6 @@ pub struct ServerConfig {
     pub net: Vec<NetConfig>,
     #[reflect(ignore)]
     pub packet: PacketConfig,
+    pub replication: ReplicationConfig,
     pub ping: PingConfig,
 }

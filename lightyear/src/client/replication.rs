@@ -3,7 +3,6 @@ use bevy::prelude::*;
 use bevy::utils::Duration;
 
 use crate::client::connection::ConnectionManager;
-use crate::client::networking::is_connected;
 use crate::client::sync::client_is_synced;
 use crate::prelude::SharedConfig;
 use crate::shared::replication::plugin::receive::ReplicationReceivePlugin;
@@ -12,6 +11,7 @@ use crate::shared::sets::{ClientMarker, InternalReplicationSet};
 
 pub(crate) mod receive {
     use super::*;
+    use crate::prelude::{is_connected, is_host_server};
     #[derive(Default)]
     pub struct ClientReplicationReceivePlugin {
         pub tick_interval: Duration,
@@ -42,7 +42,7 @@ pub(crate) mod receive {
                 InternalReplicationSet::<ClientMarker>::All.run_if(
                     is_connected
                         .and_then(client_is_synced)
-                        .and_then(not(SharedConfig::is_host_server_condition)),
+                        .and_then(not(is_host_server)),
                 ),
             );
         }
@@ -58,9 +58,9 @@ pub(crate) mod send {
     use crate::prelude::client::NetClient;
     use crate::prelude::server::{ControlledBy, ServerConfig, ServerReplicationSet};
     use crate::prelude::{
-        ClientId, ComponentRegistry, DisabledComponent, OverrideTargetComponent, PrePredicted,
-        ReplicateHierarchy, ReplicateOnceComponent, Replicated, ReplicationGroup,
-        ShouldBePredicted, TargetEntity, VisibilityMode,
+        is_connected, is_host_server, ClientId, ComponentRegistry, DisabledComponent,
+        OverrideTargetComponent, PrePredicted, ReplicateHierarchy, ReplicateOnceComponent,
+        Replicated, ReplicationGroup, ShouldBePredicted, TargetEntity, VisibilityMode,
     };
     use crate::server::events::EntitySpawnEvent;
     use crate::server::replication::send::SyncTarget;
@@ -99,7 +99,7 @@ pub(crate) mod send {
                     InternalReplicationSet::<ClientMarker>::All.run_if(
                         is_connected
                             .and_then(client_is_synced)
-                            .and_then(not(SharedConfig::is_host_server_condition)),
+                            .and_then(not(is_host_server)),
                     ),
                 )
                 // SYSTEMS
@@ -119,8 +119,7 @@ pub(crate) mod send {
                         ),
                         handle_replicating_add
                             .in_set(InternalReplicationSet::<ClientMarker>::AfterBuffer),
-                        add_replicated_component_host_server
-                            .run_if(SharedConfig::is_host_server_condition),
+                        add_replicated_component_host_server.run_if(is_host_server),
                     ),
                 );
         }
@@ -375,22 +374,22 @@ pub(crate) mod send {
                     } else {
                         let group_id = group.group_id(Some(entity));
                         // TODO: should we have additional state tracking so that we know we are in the process of sending this entity to clients?
-                        let collect_changes_since_this_tick = sender
+                        let send_tick = sender
                             .replication_sender
                             .group_channels
                             .entry(group_id)
                             .or_default()
-                            .collect_changes_since_this_tick;
+                            .send_tick;
 
                         // send the update for all changes newer than the last ack bevy tick for the group
-                        if collect_changes_since_this_tick.map_or(true, |c| {
+                        if send_tick.map_or(true, |c| {
                             component
                                 .last_changed()
                                 .is_newer_than(c, system_bevy_ticks.this_run())
                         }) {
                             trace!(
                                 change_tick = ?component.last_changed(),
-                                ?collect_changes_since_this_tick,
+                                ?send_tick,
                                 current_tick = ?system_bevy_ticks.this_run(),
                                 "prepare entity update changed check"
                             );

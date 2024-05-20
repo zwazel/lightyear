@@ -22,7 +22,7 @@ use crate::server::visibility::immediate::VisibilityPlugin;
 use crate::server::visibility::room::RoomPlugin;
 use crate::shared::plugin::SharedPlugin;
 
-use super::config::ServerConfig;
+use super::config::{ReplicationConfig, ServerConfig};
 
 /// A plugin group containing all the server plugins.
 ///
@@ -72,6 +72,8 @@ struct SetupPlugin {
 impl Plugin for SetupPlugin {
     fn build(&self, app: &mut App) {
         app
+            // REFLECTION
+            .register_type::<ReplicationConfig>()
             // RESOURCES //
             .insert_resource(self.config.clone())
             // REFLECTION TYPE DATA //
