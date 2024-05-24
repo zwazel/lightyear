@@ -28,7 +28,9 @@ pub enum FixedSet {
 }
 
 #[derive(Clone)]
-pub struct SharedPlugin;
+pub struct SharedPlugin {
+    pub(crate) show_confirmed: bool,
+}
 
 impl Plugin for SharedPlugin {
     fn build(&self, app: &mut App) {
@@ -43,15 +45,23 @@ impl Plugin for SharedPlugin {
                     .after(InterpolationSet::Interpolate)
                     .after(PredictionSet::VisualCorrection),
             );
-            app.add_plugins(LogDiagnosticsPlugin {
-                filter: Some(vec![
-                    IoDiagnosticsPlugin::BYTES_IN,
-                    IoDiagnosticsPlugin::BYTES_OUT,
-                ]),
-                ..default()
-            });
-            app.add_systems(Startup, setup_diagnostic);
-            app.add_plugins(ScreenDiagnosticsPlugin::default());
+            if self.show_confirmed {
+                app.add_systems(
+                    PostUpdate,
+                    draw_confirmed_shadows
+                        .after(InterpolationSet::Interpolate)
+                        .after(PredictionSet::VisualCorrection),
+                );
+            }
+            // app.add_plugins(LogDiagnosticsPlugin {
+            //     filter: Some(vec![
+            //         IoDiagnosticsPlugin::BYTES_IN,
+            //         IoDiagnosticsPlugin::BYTES_OUT,
+            //     ]),
+            //     ..default()
+            // });
+            // app.add_systems(Startup, setup_diagnostic);
+            // app.add_plugins(ScreenDiagnosticsPlugin::default());
         }
         // bundles
         app.add_systems(Startup, init);
@@ -210,6 +220,29 @@ pub(crate) fn last_log(
 
 pub(crate) fn log() {
     debug!("run physics schedule!");
+}
+
+/// System that draws the outlines of confirmed entities, with lines to the centre of their predicted location.
+pub(crate) fn draw_confirmed_shadows(
+    mut gizmos: Gizmos,
+    confirmed_q: Query<(&Position, &Rotation, &LinearVelocity, &Confirmed), With<PlayerId>>,
+    predicted_q: Query<&Position, With<PlayerId>>,
+) {
+    for (position, rotation, velocity, confirmed) in confirmed_q.iter() {
+        let speed = velocity.length() / MAX_VELOCITY;
+        let ghost_col = Color::GRAY.with_a(speed);
+        gizmos.rect_2d(
+            Vec2::new(position.x, position.y),
+            rotation.as_radians(),
+            Vec2::ONE * PLAYER_SIZE,
+            ghost_col,
+        );
+        if let Some(e) = confirmed.predicted {
+            if let Ok(pos) = predicted_q.get(e) {
+                gizmos.line_2d(**position, **pos, ghost_col);
+            }
+        }
+    }
 }
 
 /// System that draws the player's boxes and cursors
