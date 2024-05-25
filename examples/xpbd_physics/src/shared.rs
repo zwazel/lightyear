@@ -9,9 +9,11 @@ use bevy_xpbd_2d::{PhysicsSchedule, PhysicsStepSet};
 use leafwing_input_manager::prelude::ActionState;
 use tracing::Level;
 
+use lightyear::client::prediction::diagnostics::PredictionDiagnosticsPlugin;
 use lightyear::prelude::client::*;
 use lightyear::prelude::TickManager;
 use lightyear::prelude::*;
+use lightyear::shared::ping::diagnostics::PingDiagnosticsPlugin;
 use lightyear::transport::io::IoDiagnosticsPlugin;
 use lightyear_examples_common::shared::FIXED_TIMESTEP_HZ;
 
@@ -53,15 +55,15 @@ impl Plugin for SharedPlugin {
                         .after(PredictionSet::VisualCorrection),
                 );
             }
-            // app.add_plugins(LogDiagnosticsPlugin {
-            //     filter: Some(vec![
-            //         IoDiagnosticsPlugin::BYTES_IN,
-            //         IoDiagnosticsPlugin::BYTES_OUT,
-            //     ]),
-            //     ..default()
-            // });
-            // app.add_systems(Startup, setup_diagnostic);
-            // app.add_plugins(ScreenDiagnosticsPlugin::default());
+            app.add_plugins(LogDiagnosticsPlugin {
+                filter: Some(vec![
+                    IoDiagnosticsPlugin::BYTES_IN,
+                    IoDiagnosticsPlugin::BYTES_OUT,
+                ]),
+                ..default()
+            });
+            app.add_systems(Startup, setup_diagnostic);
+            app.add_plugins(ScreenDiagnosticsPlugin::default());
         }
         // bundles
         app.add_systems(Startup, init);
@@ -97,13 +99,36 @@ impl Plugin for SharedPlugin {
 
 fn setup_diagnostic(mut onscreen: ResMut<ScreenDiagnostics>) {
     onscreen
+        .add(
+            "Rollbacks".to_string(),
+            PredictionDiagnosticsPlugin::ROLLBACKS,
+        )
+        .aggregate(Aggregate::Value)
+        .format(|v| format!("{v:.0}"));
+    onscreen
+        .add(
+            "Rollback ticks".to_string(),
+            PredictionDiagnosticsPlugin::ROLLBACK_TICKS,
+        )
+        .aggregate(Aggregate::Value)
+        .format(|v| format!("{v:.0}"));
+    onscreen
+        .add(
+            "RB depth".to_string(),
+            PredictionDiagnosticsPlugin::ROLLBACK_DEPTH,
+        )
+        .aggregate(Aggregate::Value)
+        .format(|v| format!("{v:.1}"));
+    // screen diagnostics twitches due to layout change when a metric adds or removes
+    // a digit, so pad these metrics to 3 digits.
+    onscreen
         .add("KB_in".to_string(), IoDiagnosticsPlugin::BYTES_IN)
         .aggregate(Aggregate::Average)
-        .format(|v| format!("{v:.0}"));
+        .format(|v| format!("{v:0>3.0}"));
     onscreen
         .add("KB_out".to_string(), IoDiagnosticsPlugin::BYTES_OUT)
         .aggregate(Aggregate::Average)
-        .format(|v| format!("{v:.0}"));
+        .format(|v| format!("{v:0>3.0}"));
 }
 
 // Generate pseudo-random color from id

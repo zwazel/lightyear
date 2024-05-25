@@ -19,7 +19,7 @@ pub mod prediction;
 
 pub mod sync;
 
-mod diagnostics;
+pub mod diagnostics;
 mod easings;
 
 pub(crate) mod io;
