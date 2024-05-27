@@ -12,8 +12,7 @@ use lightyear::client::sync::SyncConfig;
 use lightyear::prelude::client::{InterpolationConfig, PredictionConfig};
 use lightyear::prelude::{client, server, MessageRegistry, Tick, TickManager};
 use lightyear::prelude::{ClientId, SharedConfig, TickConfig};
-use lightyear::server::input::InputBuffers;
-use lightyear::shared::replication::components::Replicate;
+use lightyear::server::input::native::InputBuffers;
 use lightyear::shared::replication::network_target::NetworkTarget;
 use lightyear_benches::local_stepper::{LocalBevyStepper, Step as LocalStep};
 use lightyear_benches::protocol::*;
@@ -29,7 +28,7 @@ const NUM_MESSAGE: &[usize] = &[0, 10, 100, 1000, 10000];
 
 /// Sending N message from server to channel, with a local io
 #[divan::bench(
-    sample_count = 1,
+    sample_count = 100,
     args = NUM_MESSAGE,
 )]
 fn send_message(bencher: Bencher, n: usize) {
