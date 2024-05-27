@@ -152,8 +152,9 @@ impl NetServer for Server {
                         .expect("could not get steamworks client")
                         .get_client();
 
-                    client.networking_utils().init_relay_network_access();
-                    info!("Steam Relay network access initialized.");
+                    // TODO: currently just doing it in my project directly on startup, as i can't seem to be able to do it here at creation time or anything.
+                    /* client.networking_utils().init_relay_network_access();
+                    info!("Steam Relay network access initialized."); */
 
                     client
                         .networking_sockets()
