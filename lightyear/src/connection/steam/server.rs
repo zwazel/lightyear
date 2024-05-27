@@ -145,15 +145,21 @@ impl NetServer for Server {
                 info!("Steam socket started on {:?}", server_addr);
             }
             SocketConfig::P2P { virtual_port } => {
-                self.listen_socket = Some(
-                    self.steamworks_client
+                self.listen_socket = Some({
+                    let client = self
+                        .steamworks_client
                         .read()
                         .expect("could not get steamworks client")
-                        .get_client()
+                        .get_client();
+
+                    client.networking_utils().init_relay_network_access();
+                    info!("Steam Relay network access initialized.");
+
+                    client
                         .networking_sockets()
                         .create_listen_socket_p2p(virtual_port, vec![])
-                        .context("could not create server listen socket")?,
-                );
+                        .context("could not create server listen socket")?
+                });
                 info!(
                     "Steam P2P socket started on virtual port: {:?}",
                     virtual_port
