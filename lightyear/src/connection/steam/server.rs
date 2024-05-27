@@ -16,7 +16,9 @@ use steamworks::networking_sockets::{ListenSocket, NetConnection};
 use steamworks::networking_types::{
     ListenSocketEvent, NetConnectionEnd, NetworkingConfigEntry, NetworkingConfigValue, SendFlags,
 };
-use steamworks::{ClientManager, Manager, ServerManager, ServerMode, SingleClient, SteamError};
+use steamworks::{
+    ClientManager, Manager, P2PSessionRequest, ServerManager, ServerMode, SingleClient, SteamError,
+};
 use tracing::{error, info};
 
 use super::get_networking_options;
@@ -198,11 +200,17 @@ impl NetServer for Server {
     }
 
     fn try_update(&mut self, delta_ms: f64) -> Result<()> {
-        self.steamworks_client
+        let mut client = self
+            .steamworks_client
             .write()
-            .expect("could not get steamworks client")
-            .get_single()
-            .run_callbacks();
+            .expect("could not get steamworks client");
+
+        let my_client = client.get_client();
+        let _call_back = my_client.register_callback(move |request: P2PSessionRequest| {
+            println!("P2P session request from {:?}", request.remote);
+        });
+
+        client.get_single().run_callbacks();
 
         // reset connection events
         self.new_connections.clear();
@@ -212,6 +220,7 @@ impl NetServer for Server {
         let Some(listen_socket) = self.listen_socket.as_mut() else {
             return Err(SteamError::NoConnection.into());
         };
+
         while let Some(event) = listen_socket.try_receive_event() {
             match event {
                 ListenSocketEvent::Connected(event) => {
