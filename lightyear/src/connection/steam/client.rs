@@ -9,19 +9,26 @@ use crate::transport::LOCAL_SOCKET;
 use anyhow::{anyhow, Context, Result};
 use bevy::reflect::Reflect;
 use bevy::tasks::IoTaskPool;
+use lazy_static::lazy_static;
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use steamworks::networking_sockets::{NetConnection, NetworkingSockets};
 use steamworks::networking_types::{
     NetConnectionEnd, NetConnectionInfo, NetworkingConfigEntry, NetworkingConfigValue,
     NetworkingConnectionState, NetworkingIdentity, SendFlags,
 };
-use steamworks::{ClientManager, SingleClient, SteamId};
+use steamworks::{ClientManager, LobbyId, SingleClient, SteamId};
 use tracing::{info, warn};
 
 use super::get_networking_options;
 use super::steamworks_client::SteamworksClient;
+
+lazy_static! {
+    static ref SENDER_AND_RECEIVER_JOIN_LOBBY: Mutex<(Sender<LobbyId>, Receiver<LobbyId>)> =
+        Mutex::new(mpsc::channel());
+}
 
 const MAX_MESSAGE_BATCH_SIZE: usize = 512;
 
@@ -128,13 +135,20 @@ impl NetClient for Client {
                     .read()
                     .expect("could not get steamworks client")
                     .get_client()
-                    .networking_sockets()
-                    .connect_p2p(
-                        NetworkingIdentity::new_steam_id(SteamId::from_raw(steam_id)),
-                        virtual_port,
-                        vec![],
-                    )
-                    .context("failed to create p2p connection")?;
+                    .matchmaking()
+                    .join_lobby(LobbyId::from_raw(steam_id), move |result| {
+                        info!("Joining lobby...: {:?}", result);
+
+                        if let Ok(result) = result {
+                            SENDER_AND_RECEIVER_JOIN_LOBBY
+                                .lock()
+                                .unwrap()
+                                .0
+                                .send(result)
+                                .unwrap();
+                        }
+                        // TODO: handle error
+                    });
             }
         }
         Ok(())
@@ -166,6 +180,10 @@ impl NetClient for Client {
             .expect("could not get steamworks single client")
             .get_single()
             .run_callbacks();
+
+        if let Ok(lobby) = SENDER_AND_RECEIVER_JOIN_LOBBY.lock().unwrap().1.try_recv() {
+            info!("Joined lobby: {:?}", lobby);
+        }
 
         // TODO: should I maintain an internal state for the connection? or just rely on `connection_state()` ?
         // update connection state

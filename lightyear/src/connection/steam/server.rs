@@ -9,20 +9,28 @@ use crate::server::io::Io;
 use crate::transport::LOCAL_SOCKET;
 use anyhow::{anyhow, Context, Result};
 use bevy::utils::HashMap;
+use lazy_static::lazy_static;
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::{Arc, RwLock};
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use steamworks::networking_sockets::{ListenSocket, NetConnection};
 use steamworks::networking_types::{
     ListenSocketEvent, NetConnectionEnd, NetworkingConfigEntry, NetworkingConfigValue, SendFlags,
 };
 use steamworks::{
-    ClientManager, Manager, P2PSessionRequest, ServerManager, ServerMode, SingleClient, SteamError,
+    ClientManager, LobbyId, Manager, P2PSessionRequest, ServerManager, ServerMode, SingleClient,
+    SteamError,
 };
 use tracing::{error, info};
 
 use super::get_networking_options;
 use super::steamworks_client::SteamworksClient;
+
+lazy_static! {
+    static ref SENDER_AND_RECEIVER_CREATE_LOBBY: Mutex<(Sender<LobbyId>, Receiver<LobbyId>)> =
+        Mutex::new(mpsc::channel());
+}
 
 #[derive(Debug, Clone)]
 pub struct SteamConfig {
@@ -75,6 +83,7 @@ pub struct Server {
     server: Option<steamworks::Server>,
     config: SteamConfig,
     listen_socket: Option<ListenSocket<ClientManager>>,
+    lobby_id: Option<LobbyId>,
     connections: HashMap<ClientId, NetConnection<ClientManager>>,
     packet_queue: VecDeque<(Packet, ClientId)>,
     buffer_pool: BufferPool,
@@ -113,6 +122,7 @@ impl Server {
             server,
             config,
             listen_socket: None,
+            lobby_id: None,
             connections: HashMap::new(),
             packet_queue: VecDeque::new(),
             buffer_pool: BufferPool::default(),
@@ -147,7 +157,7 @@ impl NetServer for Server {
                 info!("Steam socket started on {:?}", server_addr);
             }
             SocketConfig::P2P { virtual_port } => {
-                self.listen_socket = Some({
+                /* self.listen_socket = Some({
                     let client = self
                         .steamworks_client
                         .read()
@@ -162,11 +172,35 @@ impl NetServer for Server {
                         .networking_sockets()
                         .create_listen_socket_p2p(virtual_port, vec![])
                         .context("could not create server listen socket")?
+
                 });
                 info!(
                     "Steam P2P socket started on virtual port: {:?}",
                     virtual_port
-                );
+                ); */
+
+                self.steamworks_client
+                    .read()
+                    .expect("could not get steamworks client")
+                    .get_client()
+                    .matchmaking()
+                    .create_lobby(
+                        steamworks::LobbyType::Public,
+                        self.config.max_clients as u32,
+                        move |lobby| match lobby {
+                            Ok(lobby) => {
+                                info!("Lobby created with id: {:?}, forwarding in channel", lobby);
+
+                                SENDER_AND_RECEIVER_CREATE_LOBBY
+                                    .lock()
+                                    .unwrap()
+                                    .0
+                                    .send(lobby)
+                                    .unwrap();
+                            }
+                            Err(_) => error!("Failed to create lobby"),
+                        },
+                    );
             }
         };
         Ok(())
@@ -206,9 +240,6 @@ impl NetServer for Server {
             .expect("could not get steamworks client");
 
         let my_client = client.get_client();
-        let _call_back = my_client.register_callback(move |request: P2PSessionRequest| {
-            println!("P2P session request from {:?}", request.remote);
-        });
 
         client.get_single().run_callbacks();
 
@@ -216,12 +247,31 @@ impl NetServer for Server {
         self.new_connections.clear();
         self.new_disconnections.clear();
 
-        // process connection events
-        let Some(listen_socket) = self.listen_socket.as_mut() else {
+        if let Ok(lobby) = SENDER_AND_RECEIVER_CREATE_LOBBY
+            .lock()
+            .unwrap()
+            .1
+            .try_recv()
+        {
+            info!("Lobby received: {:?}", lobby);
+            self.lobby_id = Some(lobby);
+        }
+
+        // Creating a lobby takes a moment, so this screams a lot in the logs...
+        let Some(lobby_id) = self.lobby_id else {
             return Err(SteamError::NoConnection.into());
         };
 
-        while let Some(event) = listen_socket.try_receive_event() {
+        
+
+        // TODO: Currently, there is no listen socket, because we only have a lobby.
+
+        // process connection events
+        /* let Some(listen_socket) = self.listen_socket.as_mut() else {
+            return Err(SteamError::NoConnection.into());
+        }; */
+
+        /* while let Some(event) = listen_socket.try_receive_event() {
             match event {
                 ListenSocketEvent::Connected(event) => {
                     if let Some(steam_id) = event.remote().steam_id() {
@@ -272,7 +322,7 @@ impl NetServer for Server {
                     }
                 }
             }
-        }
+        } */
 
         // buffer incoming packets
         for (client_id, connection) in self.connections.iter_mut() {
