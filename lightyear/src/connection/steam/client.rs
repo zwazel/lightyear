@@ -163,11 +163,11 @@ impl NetClient for Client {
     }
 
     fn try_update(&mut self, delta_ms: f64) -> Result<()> {
-        /* self.steamworks_client
-        .write()
-        .expect("could not get steamworks single client")
-        .get_single()
-        .run_callbacks(); */
+        self.steamworks_client
+            .write()
+            .expect("could not get steamworks single client")
+            .get_single()
+            .run_callbacks();
 
         // TODO: should I maintain an internal state for the connection? or just rely on `connection_state()` ?
         // update connection state

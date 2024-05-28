@@ -206,7 +206,7 @@ impl NetServer for Server {
             .expect("could not get steamworks client");
 
         let my_client = client.get_client();
-        // client.get_single().run_callbacks();
+        client.get_single().run_callbacks();
 
         // reset connection events
         self.new_connections.clear();
