@@ -58,6 +58,7 @@ impl Default for SocketConfig {
     }
 }
 
+/// Steam networking client wrapper
 pub struct Client {
     steamworks_client: Arc<RwLock<SteamworksClient>>,
     config: SteamConfig,

@@ -58,7 +58,7 @@ pub trait NetClient: Send + Sync {
 }
 
 #[enum_dispatch(NetClient)]
-pub(crate) enum NetClientDispatch {
+pub enum NetClientDispatch {
     Netcode(super::netcode::Client<()>),
     #[cfg(all(feature = "steam", not(target_family = "wasm")))]
     Steam(super::steam::client::Client),
@@ -69,7 +69,7 @@ pub(crate) enum NetClientDispatch {
 /// (either a Netcode, Steam, or Local client)
 #[derive(Resource)]
 pub struct ClientConnection {
-    pub(crate) client: NetClientDispatch,
+    pub client: NetClientDispatch,
 }
 
 pub type IoConfig = SharedIoConfig<ClientTransport>;
