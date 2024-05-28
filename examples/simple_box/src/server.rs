@@ -30,11 +30,11 @@ impl Plugin for ExampleServerPlugin {
 
 /// Start the server
 fn start_server(mut config: ResMut<ServerConfig>, mut commands: Commands) {
-    for net_config in &mut config.net {
-        net_config.set_accept_connection_request_fn(Arc::new(|client_id| {
+    /* for net_config in &mut config.net {
+        net_config.set_connection_request_handler(Arc::new(|client_id| {
             client_id != ClientId::Netcode(0)
         }));
-    }
+    } */
     commands.start_server();
 }
 

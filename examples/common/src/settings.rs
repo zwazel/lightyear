@@ -1,6 +1,7 @@
 //! This module parses the settings.ron file and builds a lightyear configuration from it
 #![allow(unused_variables)]
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::{Arc, RwLock};
 
 use bevy::asset::ron;
 use bevy::prelude::{default, Resource};
@@ -16,7 +17,7 @@ use bevy::tasks::IoTaskPool;
 use lightyear::prelude::client::Authentication;
 #[cfg(not(target_family = "wasm"))]
 use lightyear::prelude::client::SteamConfig;
-use lightyear::prelude::{CompressionConfig, LinkConditionerConfig};
+use lightyear::prelude::{CompressionConfig, LinkConditionerConfig, SteamworksClient};
 
 use lightyear::prelude::{client, server};
 
@@ -168,6 +169,10 @@ pub(crate) fn build_server_netcode_config(
 /// listens for incoming client connections
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn get_server_net_configs(settings: &Settings) -> Vec<server::NetConfig> {
+    use std::sync::{Arc, RwLock};
+
+    use lightyear::prelude::SteamworksClient;
+
     settings
         .server
         .transport
@@ -223,10 +228,10 @@ pub(crate) fn get_server_net_configs(settings: &Settings) -> Vec<server::NetConf
             } => server::NetConfig::Steam {
                 config: server::SteamConfig {
                     app_id: *app_id,
-                    server_ip: *server_ip,
-                    game_port: *game_port,
-                    query_port: *query_port,
                     max_clients: 16,
+                    socket_config: server::SocketConfig::P2P {
+                        virtual_port: *game_port as i32,
+                    },
                     ..default()
                 },
                 conditioner: settings
@@ -234,6 +239,7 @@ pub(crate) fn get_server_net_configs(settings: &Settings) -> Vec<server::NetConf
                     .conditioner
                     .as_ref()
                     .map_or(None, |c| Some(c.build())),
+                steamworks_client: Some(Arc::new(RwLock::new(SteamworksClient::new(*app_id)))),
             },
         })
         .collect()
@@ -306,14 +312,19 @@ pub(crate) fn get_client_net_config(settings: &Settings, client_id: u64) -> clie
         #[cfg(not(target_family = "wasm"))]
         ClientTransports::Steam { app_id } => client::NetConfig::Steam {
             config: SteamConfig {
-                server_addr,
                 app_id: *app_id,
+                socket_config: client::SocketConfig::P2P {
+                    virtual_port: settings.client.client_port as i32,
+                    // This is should probably be changed, it feels weird having to create the whole config with the steam id... that should probably rather happen at runtime?
+                    steam_id: 76561198109834536,
+                },
             },
             conditioner: settings
                 .server
                 .conditioner
                 .as_ref()
                 .map_or(None, |c| Some(c.build())),
+            steamworks_client: Some(Arc::new(RwLock::new(SteamworksClient::new(*app_id)))),
         },
     }
 }
