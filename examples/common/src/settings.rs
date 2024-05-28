@@ -14,8 +14,7 @@ use async_compat::Compat;
 use bevy::tasks::IoTaskPool;
 
 use lightyear::prelude::client::Authentication;
-#[cfg(not(target_family = "wasm"))]
-#[cfg(feature = "steam")]
+#[cfg(all(feature = "steam", not(target_family = "wasm")))]
 use lightyear::prelude::client::SteamConfig;
 use lightyear::prelude::{CompressionConfig, LinkConditionerConfig};
 
@@ -34,8 +33,7 @@ pub enum ClientTransports {
         certificate_digest: String,
     },
     WebSocket,
-    #[cfg(not(target_family = "wasm"))]
-    #[cfg(feature = "steam")]
+    #[cfg(all(feature = "steam", not(target_family = "wasm")))]
     Steam {
         app_id: u32,
     },
@@ -52,8 +50,7 @@ pub enum ServerTransports {
     WebSocket {
         local_port: u16,
     },
-    #[cfg(not(target_family = "wasm"))]
-    #[cfg(feature = "steam")]
+    #[cfg(all(feature = "steam", not(target_family = "wasm")))]
     Steam {
         app_id: u32,
         server_ip: Ipv4Addr,
@@ -218,7 +215,7 @@ pub(crate) fn get_server_net_configs(settings: &Settings) -> Vec<server::NetConf
                     server_addr: SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), *local_port),
                 },
             ),
-            #[cfg(feature = "steam")]
+            #[cfg(all(feature = "steam", not(target_family = "wasm")))]
             ServerTransports::Steam {
                 app_id,
                 server_ip,
@@ -307,8 +304,7 @@ pub(crate) fn get_client_net_config(settings: &Settings, client_id: u64) -> clie
             &settings.shared,
             client::ClientTransport::WebSocketClient { server_addr },
         ),
-        #[cfg(not(target_family = "wasm"))]
-        #[cfg(feature = "steam")]
+        #[cfg(all(feature = "steam", not(target_family = "wasm")))]
         ClientTransports::Steam { app_id } => client::NetConfig::Steam {
             config: SteamConfig {
                 server_addr,
