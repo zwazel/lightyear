@@ -329,7 +329,7 @@ pub(crate) fn get_client_net_config(settings: &Settings, client_id: u64) -> clie
                 config: SteamConfig {
                     app_id: *app_id,
                     socket_config: client::SocketConfig::P2P {
-                        virtual_port: settings.client.client_port as i32,
+                        virtual_port: settings.client.server_port as i32,
                         // This is should probably be changed, it feels weird having to create the whole config with the steam id... that should probably rather happen at runtime?
                         steam_id: 76561198109834536,
                     },
