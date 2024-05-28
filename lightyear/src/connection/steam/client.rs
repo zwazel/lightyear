@@ -181,7 +181,6 @@ impl NetClient for Client {
                 Err(anyhow!("connection closed"))
             }
             NetworkingConnectionState::Connected => {
-                println!("Connected to server");
                 // receive packet
                 let connection = self.connection.as_mut().unwrap();
                 for message in connection
