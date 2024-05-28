@@ -124,17 +124,19 @@ impl NetClient for Client {
                 virtual_port,
                 steam_id,
             } => {
-                self.steamworks_client
-                    .read()
-                    .expect("could not get steamworks client")
-                    .get_client()
-                    .networking_sockets()
-                    .connect_p2p(
-                        NetworkingIdentity::new_steam_id(SteamId::from_raw(steam_id)),
-                        virtual_port,
-                        vec![],
-                    )
-                    .context("failed to create p2p connection")?;
+                self.connection = Some(
+                    self.steamworks_client
+                        .read()
+                        .expect("could not get steamworks client")
+                        .get_client()
+                        .networking_sockets()
+                        .connect_p2p(
+                            NetworkingIdentity::new_steam_id(SteamId::from_raw(steam_id)),
+                            virtual_port,
+                            vec![],
+                        )
+                        .context("failed to create p2p connection")?,
+                );
             }
         }
         Ok(())
@@ -162,10 +164,10 @@ impl NetClient for Client {
 
     fn try_update(&mut self, delta_ms: f64) -> Result<()> {
         /* self.steamworks_client
-            .write()
-            .expect("could not get steamworks single client")
-            .get_single()
-            .run_callbacks(); */
+        .write()
+        .expect("could not get steamworks single client")
+        .get_single()
+        .run_callbacks(); */
 
         // TODO: should I maintain an internal state for the connection? or just rely on `connection_state()` ?
         // update connection state
@@ -179,6 +181,7 @@ impl NetClient for Client {
                 Err(anyhow!("connection closed"))
             }
             NetworkingConnectionState::Connected => {
+                println!("Connected to server");
                 // receive packet
                 let connection = self.connection.as_mut().unwrap();
                 for message in connection
