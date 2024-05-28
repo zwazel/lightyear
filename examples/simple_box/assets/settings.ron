@@ -33,15 +33,15 @@ Settings(
             packet_loss: 0.05
         )),
         transport: [
-            WebTransport(
+            /* WebTransport(
                 local_port: 5000
-            ),
+            ), */
             Udp(
                 local_port: 5001
             ),
-            WebSocket(
+            /* WebSocket(
                 local_port: 5002
-            ),
+            ), */
             Steam(
                 app_id: 480,
                 server_ip: "0.0.0.0",

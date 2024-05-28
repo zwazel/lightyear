@@ -225,22 +225,30 @@ pub(crate) fn get_server_net_configs(settings: &Settings) -> Vec<server::NetConf
                 server_ip,
                 game_port,
                 query_port,
-            } => server::NetConfig::Steam {
-                config: server::SteamConfig {
-                    app_id: *app_id,
-                    max_clients: 16,
-                    socket_config: server::SocketConfig::P2P {
-                        virtual_port: *game_port as i32,
+            } => {
+                let steamworks_client = SteamworksClient::new(*app_id);
+                steamworks_client
+                    .get_client()
+                    .networking_utils()
+                    .init_relay_network_access();
+
+                server::NetConfig::Steam {
+                    config: server::SteamConfig {
+                        app_id: *app_id,
+                        max_clients: 16,
+                        socket_config: server::SocketConfig::P2P {
+                            virtual_port: *game_port as i32,
+                        },
+                        ..default()
                     },
-                    ..default()
-                },
-                conditioner: settings
-                    .server
-                    .conditioner
-                    .as_ref()
-                    .map_or(None, |c| Some(c.build())),
-                steamworks_client: Some(Arc::new(RwLock::new(SteamworksClient::new(*app_id)))),
-            },
+                    conditioner: settings
+                        .server
+                        .conditioner
+                        .as_ref()
+                        .map_or(None, |c| Some(c.build())),
+                    steamworks_client: Some(Arc::new(RwLock::new(steamworks_client))),
+                }
+            }
         })
         .collect()
 }
@@ -310,21 +318,29 @@ pub(crate) fn get_client_net_config(settings: &Settings, client_id: u64) -> clie
             client::ClientTransport::WebSocketClient { server_addr },
         ),
         #[cfg(not(target_family = "wasm"))]
-        ClientTransports::Steam { app_id } => client::NetConfig::Steam {
-            config: SteamConfig {
-                app_id: *app_id,
-                socket_config: client::SocketConfig::P2P {
-                    virtual_port: settings.client.client_port as i32,
-                    // This is should probably be changed, it feels weird having to create the whole config with the steam id... that should probably rather happen at runtime?
-                    steam_id: 76561198109834536,
+        ClientTransports::Steam { app_id } => {
+            let steamworks_client = SteamworksClient::new(*app_id);
+            steamworks_client
+                .get_client()
+                .networking_utils()
+                .init_relay_network_access();
+
+            client::NetConfig::Steam {
+                config: SteamConfig {
+                    app_id: *app_id,
+                    socket_config: client::SocketConfig::P2P {
+                        virtual_port: settings.client.client_port as i32,
+                        // This is should probably be changed, it feels weird having to create the whole config with the steam id... that should probably rather happen at runtime?
+                        steam_id: 76561198109834536,
+                    },
                 },
-            },
-            conditioner: settings
-                .server
-                .conditioner
-                .as_ref()
-                .map_or(None, |c| Some(c.build())),
-            steamworks_client: Some(Arc::new(RwLock::new(SteamworksClient::new(*app_id)))),
-        },
+                conditioner: settings
+                    .server
+                    .conditioner
+                    .as_ref()
+                    .map_or(None, |c| Some(c.build())),
+                steamworks_client: Some(Arc::new(RwLock::new(steamworks_client))),
+            }
+        }
     }
 }
