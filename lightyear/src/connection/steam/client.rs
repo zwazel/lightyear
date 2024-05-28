@@ -129,6 +129,7 @@ impl NetClient for Client {
                 virtual_port,
                 steam_id,
             } => {
+                println!("Connecting to steam id: {} with virtual port: {}", steam_id, virtual_port);
                 self.connection = Some(
                     self.steamworks_client
                         .read()
