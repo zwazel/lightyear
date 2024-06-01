@@ -8,7 +8,9 @@ use bevy::utils::{HashMap, HashSet};
 use bytes::Bytes;
 use hashbrown::hash_map::Entry;
 use serde::Serialize;
-use tracing::{debug, error, info, trace, trace_span, warn};
+use tracing::{debug, error, info, info_span, trace, trace_span, warn};
+#[cfg(feature = "trace")]
+use tracing::{instrument, Level};
 
 use crate::channel::builder::{EntityUpdatesChannel, PingChannel};
 use bitcode::encoding::Fixed;
@@ -19,7 +21,7 @@ use crate::connection::id::ClientId;
 use crate::inputs::native::input_buffer::InputBuffer;
 use crate::packet::message_manager::MessageManager;
 use crate::packet::packet::Packet;
-use crate::packet::packet_manager::{Payload, PACKET_BUFFER_CAPACITY};
+use crate::packet::packet_builder::{Payload, PACKET_BUFFER_CAPACITY};
 use crate::prelude::server::{DisconnectEvent, RoomId, RoomManager};
 use crate::prelude::{
     Channel, ChannelKind, Message, Mode, PreSpawnedPlayerObject, ReplicationGroup,
@@ -207,13 +209,13 @@ impl ConnectionManager {
         }
     }
 
-    pub(crate) fn connection(&self, client_id: ClientId) -> Result<&Connection> {
+    pub fn connection(&self, client_id: ClientId) -> Result<&Connection> {
         self.connections
             .get(&client_id)
             .context("client id not found")
     }
 
-    pub(crate) fn connection_mut(&mut self, client_id: ClientId) -> Result<&mut Connection> {
+    pub fn connection_mut(&mut self, client_id: ClientId) -> Result<&mut Connection> {
         self.connections
             .get_mut(&client_id)
             .context("client id not found")
@@ -302,17 +304,19 @@ impl ConnectionManager {
     /// Buffer all the replication messages to send.
     /// Keep track of the bevy Change Tick: when a message is acked, we know that we only have to send
     /// the updates since that Change Tick
+    #[cfg_attr(feature = "trace", instrument(level = Level::INFO, skip_all))]
     pub(crate) fn buffer_replication_messages(
         &mut self,
         tick: Tick,
         bevy_tick: BevyTick,
     ) -> Result<()> {
-        let _span = trace_span!("buffer_replication_messages").entered();
+        let _span = info_span!("buffer_replication_messages").entered();
         self.connections
             .values_mut()
             .try_for_each(move |c| c.buffer_replication_messages(tick, bevy_tick))
     }
 
+    #[cfg_attr(feature = "trace", instrument(level = Level::INFO, skip_all))]
     pub(crate) fn receive(
         &mut self,
         world: &mut World,
@@ -376,7 +380,7 @@ pub struct Connection {
     /// We create one entity per connected client, so that users
     /// can store metadata about the client using the ECS
     entity: Entity,
-    pub(crate) message_manager: MessageManager,
+    pub message_manager: MessageManager,
     pub(crate) replication_sender: ReplicationSender,
     pub(crate) replication_receiver: ReplicationReceiver,
     pub(crate) events: ConnectionEvents,
@@ -694,7 +698,7 @@ impl Connection {
 
     pub fn recv_packet(
         &mut self,
-        packet: Packet,
+        packet: Payload,
         tick_manager: &TickManager,
         component_registry: &ComponentRegistry,
         delta_manager: &mut DeltaManager,

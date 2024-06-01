@@ -3,6 +3,7 @@ use std::ops::DerefMut;
 
 use anyhow::{anyhow, Context, Result};
 use async_channel::TryRecvError;
+use bevy::ecs::schedule::run_enter_schedule;
 use bevy::ecs::system::{Command, RunSystemOnce, SystemChangeTick, SystemParam, SystemState};
 use bevy::prelude::ResMut;
 use bevy::prelude::*;
@@ -15,9 +16,13 @@ use crate::client::connection::ConnectionManager;
 use crate::client::events::{ConnectEvent, DisconnectEvent};
 use crate::client::interpolation::Interpolated;
 use crate::client::io::ClientIoEvent;
+use crate::client::networking::utils::AppStateExt;
 use crate::client::prediction::Predicted;
+use crate::client::replication::send::ReplicateToServer;
 use crate::client::sync::SyncSet;
-use crate::connection::client::{ClientConnection, NetClient, NetConfig};
+use crate::connection::client::{
+    ClientConnection, ConnectionState, DisconnectReason, NetClient, NetConfig,
+};
 use crate::connection::server::{IoConfig, ServerConnections};
 use crate::prelude::{
     is_host_server, ChannelRegistry, MainSet, MessageRegistry, SharedConfig, TickManager,
@@ -40,9 +45,10 @@ impl Plugin for ClientNetworkingPlugin {
     fn build(&self, app: &mut App) {
         app
             // REFLECTION
+            .register_type::<HostServerMetadata>()
             .register_type::<IoConfig>()
             // STATE
-            .init_state::<NetworkingState>()
+            .init_state_without_entering::<NetworkingState>()
             // RESOURCE
             .init_resource::<HostServerMetadata>()
             // SYSTEM SETS
@@ -127,14 +133,6 @@ impl Plugin for ClientNetworkingPlugin {
 
 pub(crate) fn receive(world: &mut World) {
     trace!("Receive server packets");
-    // TODO: here we can control time elapsed from the client's perspective?
-
-    // TODO: THE CLIENT COULD DO PHYSICS UPDATES INSIDE FIXED-UPDATE SYSTEMS
-    //  WE SHOULD BE CALLING UPDATE INSIDE THOSE AS WELL SO THAT WE CAN SEND UPDATES
-    //  IN THE MIDDLE OF THE FIXED UPDATE LOOPS
-    //  WE JUST KEEP AN INTERNAL TIMER TO KNOW IF WE REACHED OUR TICK AND SHOULD RECEIVE/SEND OUT PACKETS?
-    //  FIXED-UPDATE.expend() updates the clock zR the fixed update interval
-    //  THE NETWORK TICK INTERVAL COULD BE IN BETWEEN FIXED UPDATE INTERVALS
     world.resource_scope(
         |world: &mut World, mut connection: Mut<ConnectionManager>| {
             world.resource_scope(
@@ -152,7 +150,7 @@ pub(crate) fn receive(world: &mut World) {
                                                         time_manager.update(delta);
                                                         trace!(time = ?time_manager.current_time(), tick = ?tick_manager.tick(), "receive");
 
-                                                        if netclient.state() != NetworkingState::Disconnected {
+                                                        if !matches!(netclient.state(), ConnectionState::Disconnected {..}){
                                                             let _ = netclient
                                                                 .try_update(delta.as_secs_f64())
                                                                 .map_err(|e| {
@@ -160,7 +158,7 @@ pub(crate) fn receive(world: &mut World) {
                                                                 });
                                                         }
 
-                                                        if netclient.state() == NetworkingState::Connected {
+                                                        if matches!(netclient.state(), ConnectionState::Connected) {
                                                             // we just connected, do a state transition
                                                             if state.get() != &NetworkingState::Connected {
                                                                 debug!("Setting the networking state to connected");
@@ -174,7 +172,8 @@ pub(crate) fn receive(world: &mut World) {
                                                                 tick_manager.as_ref(),
                                                             );
                                                         }
-                                                        if netclient.state() == NetworkingState::Disconnected {
+                                                        if let ConnectionState::Disconnected{reason} = netclient.state() {
+                                                            netclient.disconnect_reason = reason;
                                                             // we just disconnected, do a state transition
                                                             if state.get() != &NetworkingState::Disconnected {
                                                                 next_state.set(NetworkingState::Disconnected);
@@ -298,6 +297,7 @@ fn listen_io_state(
                 Ok(ClientIoEvent::Disconnected(e)) => {
                     error!("Error from io: {}", e);
                     io.state = IoState::Disconnected;
+                    netclient.disconnect_reason = Some(DisconnectReason::Transport(e));
                     disconnect = true;
                 }
                 Err(TryRecvError::Empty) => {
@@ -305,6 +305,9 @@ fn listen_io_state(
                 }
                 Err(TryRecvError::Closed) => {
                     error!("Io status channel has been closed when it shouldn't be");
+                    netclient.disconnect_reason = Some(DisconnectReason::Transport(
+                        std::io::Error::other("Io status channel has been closed").into(),
+                    ));
                     disconnect = true;
                 }
             }
@@ -313,6 +316,7 @@ fn listen_io_state(
     if disconnect {
         debug!("Going to NetworkingState::Disconnected because of io error.");
         next_state.set(NetworkingState::Disconnected);
+        // TODO: do we need to disconnect here? we disconnect in the OnEnter(Disconnected) system anyway
         let _ = netclient
             .disconnect()
             .inspect_err(|e| debug!("error disconnecting netclient: {e:?}"));
@@ -320,7 +324,8 @@ fn listen_io_state(
 }
 
 /// Holds metadata necessary when running in HostServer mode
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 struct HostServerMetadata {
     /// entity for the client running as host-server
     client_entity: Option<Entity>,
@@ -328,7 +333,16 @@ struct HostServerMetadata {
 
 /// System that runs when we enter the Connected state
 /// Updates the ConnectEvent events
-fn on_connect(mut connect_event_writer: EventWriter<ConnectEvent>, netcode: Res<ClientConnection>) {
+fn on_connect(
+    mut connect_event_writer: EventWriter<ConnectEvent>,
+    netcode: Res<ClientConnection>,
+    mut query: Query<&mut ReplicateToServer>,
+) {
+    // Set all the ReplicateToServer ticks to changed, so that we replicate existing entities to the server
+    for mut replicate in query.iter_mut() {
+        // TODO: ideally set is_added instead of simply changed
+        replicate.set_changed();
+    }
     debug!(
         "Running OnConnect schedule with client id: {:?}",
         netcode.id()
@@ -357,7 +371,7 @@ fn on_connect_host_server(
 fn on_disconnect(
     mut connection_manager: ResMut<ConnectionManager>,
     mut disconnect_event_writer: EventWriter<DisconnectEvent>,
-    mut netcode: ResMut<ClientConnection>,
+    mut netclient: ResMut<ClientConnection>,
     mut commands: Commands,
     received_entities: Query<Entity, Or<(With<Replicated>, With<Predicted>, With<Interpolated>)>>,
 ) {
@@ -371,11 +385,12 @@ fn on_disconnect(
     connection_manager.sync_manager.synced = false;
 
     // try to disconnect again to close io tasks (in case the disconnection is from the io)
-    let _ = netcode.disconnect();
+    let _ = netclient.disconnect();
 
     // no need to update the io state, because we will recreate a new `ClientConnection`
     // for the next connection attempt
-    disconnect_event_writer.send(DisconnectEvent);
+    let reason = std::mem::take(&mut netclient.disconnect_reason);
+    disconnect_event_writer.send(DisconnectEvent { reason });
     // TODO: remove ClientConnection and ConnectionManager resources?
 }
 
@@ -455,8 +470,10 @@ fn connect(world: &mut World) {
         });
     let config = world.resource::<ClientConfig>();
 
-    if world.resource::<ClientConnection>().state() == NetworkingState::Connected
-        && config.shared.mode == Mode::HostServer
+    if matches!(
+        world.resource::<ClientConnection>().state(),
+        ConnectionState::Connected
+    ) && config.shared.mode == Mode::HostServer
     {
         // TODO: also check if the connection is of type local?
         // in host server mode, there is no connecting phase, we directly become connected
@@ -486,5 +503,34 @@ impl ClientCommands for Commands<'_, '_> {
         self.insert_resource(NextState::<NetworkingState>(Some(
             NetworkingState::Disconnected,
         )));
+    }
+}
+
+mod utils {
+    use bevy::app::{App, StateTransition};
+    use bevy::prelude::{
+        apply_state_transition, FromWorld, NextState, State, StateTransitionEvent, States,
+    };
+
+    pub(super) trait AppStateExt {
+        // Helper function that runs `init_state::<S>` without entering the state
+        // This is useful for us as we don't want to run OnEnter<NetworkingState::Disconnected> when we start the app
+        fn init_state_without_entering<S: States + FromWorld>(&mut self) -> &mut Self;
+    }
+
+    impl AppStateExt for App {
+        fn init_state_without_entering<S: States + FromWorld>(&mut self) -> &mut Self {
+            if !self.world.contains_resource::<State<S>>() {
+                self.init_resource::<State<S>>()
+                    .init_resource::<NextState<S>>()
+                    .add_event::<StateTransitionEvent<S>>()
+                    .add_systems(StateTransition, apply_state_transition::<S>);
+            }
+
+            // The OnEnter, OnExit, and OnTransition schedules are lazily initialized
+            // (i.e. when the first system is added to them), and World::try_run_schedule is used to fail
+            // gracefully if they aren't present.
+            self
+        }
     }
 }

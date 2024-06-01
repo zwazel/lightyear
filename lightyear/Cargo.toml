@@ -13,6 +13,7 @@ license = "MIT OR Apache-2.0"
 exclude = ["/tests"]
 
 [features]
+trace = []
 metrics = [
   "dep:metrics",
   "metrics-util",
@@ -69,6 +70,7 @@ leafwing-input-manager = { version = "0.13", optional = true }
 bevy_xpbd_2d = { version = "0.4", optional = true, default-features = false }
 
 # serialization
+bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 bitcode = { version = "0.5.1", package = "bitcode_lightyear_patch", path = "../vendor/bitcode", features = [
   "serde",
 ] }

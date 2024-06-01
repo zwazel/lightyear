@@ -1,7 +1,7 @@
 use crate::client::io::Io;
 use crate::client::networking::NetworkingState;
-use crate::connection::client::NetClient;
-use crate::packet::packet::Packet;
+use crate::connection::client::{ConnectionState, NetClient};
+use crate::packet::packet_builder::Payload;
 use crate::prelude::ClientId;
 use crate::transport::LOCAL_SOCKET;
 use anyhow::Result;
@@ -33,11 +33,11 @@ impl NetClient for Client {
         Ok(())
     }
 
-    fn state(&self) -> NetworkingState {
+    fn state(&self) -> ConnectionState {
         if self.is_connected {
-            NetworkingState::Connected
+            ConnectionState::Connected
         } else {
-            NetworkingState::Disconnected
+            ConnectionState::Disconnected { reason: None }
         }
     }
 
@@ -45,7 +45,7 @@ impl NetClient for Client {
         Ok(())
     }
 
-    fn recv(&mut self) -> Option<Packet> {
+    fn recv(&mut self) -> Option<Payload> {
         None
     }
 

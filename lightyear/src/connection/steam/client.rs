@@ -1,7 +1,7 @@
 use crate::client::networking::NetworkingState;
-use crate::connection::client::NetClient;
+use crate::connection::client::{ConnectionState, DisconnectReason, NetClient};
 use crate::connection::id::ClientId;
-use crate::packet::packet::Packet;
+use crate::packet::packet_builder::Payload;
 use crate::prelude::client::Io;
 use crate::prelude::LinkConditionerConfig;
 use crate::serialize::bitcode::reader::BufferPool;
@@ -63,7 +63,7 @@ pub struct Client {
     steamworks_client: Arc<RwLock<SteamworksClient>>,
     config: SteamConfig,
     connection: Option<NetConnection<ClientManager>>,
-    packet_queue: VecDeque<Packet>,
+    packet_queue: VecDeque<Payload>,
     buffer_pool: BufferPool,
     conditioner: Option<LinkConditionerConfig>,
 }
@@ -154,16 +154,23 @@ impl NetClient for Client {
         Ok(())
     }
 
-    fn state(&self) -> NetworkingState {
+    fn state(&self) -> ConnectionState {
         match self
             .connection_state()
             .unwrap_or(NetworkingConnectionState::None)
         {
             NetworkingConnectionState::Connecting | NetworkingConnectionState::FindingRoute => {
-                NetworkingState::Connecting
+                ConnectionState::Connecting
             }
-            NetworkingConnectionState::Connected => NetworkingState::Connected,
-            _ => NetworkingState::Disconnected,
+            NetworkingConnectionState::Connected => ConnectionState::Connected,
+            _ => {
+                let reason = self
+                    .connection_info()
+                    .map_or(None, |info| info.ok().map(|i| i.end_reason()))
+                    .flatten()
+                    .map(|r| DisconnectReason::Steam(r));
+                ConnectionState::Disconnected { reason }
+            }
         }
     }
 
@@ -192,19 +199,21 @@ impl NetClient for Client {
                     .receive_messages(MAX_MESSAGE_BATCH_SIZE)
                     .context("failed to receive messages")?
                 {
-                    // get a buffer from the pool to avoid new allocations
-                    let mut reader = self.buffer_pool.start_read(message.data());
-                    let packet = Packet::decode(&mut reader).context("could not decode packet")?;
-                    // return the buffer to the pool
-                    self.buffer_pool.attach(reader);
-                    self.packet_queue.push_back(packet);
+                    // // get a buffer from the pool to avoid new allocations
+                    // let mut reader = self.buffer_pool.start_read(message.data());
+                    // let packet = Packet::decode(&mut reader).context("could not decode packet")?;
+                    // // return the buffer to the pool
+                    // self.buffer_pool.attach(reader);
+                    let mut buf = vec![0u8; message.data().len()];
+                    buf.copy_from_slice(message.data());
+                    self.packet_queue.push_back(buf);
                 }
                 Ok(())
             }
         };
     }
 
-    fn recv(&mut self) -> Option<Packet> {
+    fn recv(&mut self) -> Option<Payload> {
         self.packet_queue.pop_front()
     }
 

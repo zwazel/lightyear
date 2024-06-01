@@ -136,7 +136,7 @@ pub(crate) fn receive(world: &mut World) {
                                                 for client_id in netserver.new_connections().iter().copied() {
                                                     netservers.client_server_map.insert(client_id, server_idx);
                                                     // spawn an entity for the client
-                                                    let client_entity = world.spawn(ControlledEntities::default()).id();
+                                                    let client_entity = world.spawn((ControlledEntities::default(), Name::new("Client"))).id();
                                                     connection_manager.add(client_id, client_entity);
                                                 }
                                                 // handle disconnections
@@ -173,14 +173,14 @@ pub(crate) fn receive(world: &mut World) {
                                             // enable split borrows on connection manager
                                             let connection_manager = &mut *connection_manager;
                                             for (server_idx, netserver) in netservers.servers.iter_mut().enumerate() {
-                                                while let Some((packet, client_id)) = netserver.recv() {
+                                                while let Some((payload, client_id)) = netserver.recv() {
                                                     // Note: the client_id might not be present in the connection_manager if we receive
                                                     // packets from a client
                                                     // TODO: use connection to apply on BOTH message manager and replication manager
                                                     if let Some(connection) = connection_manager
                                                         .connections.get_mut(&client_id) {
                                                         let component_registry = world.resource::<ComponentRegistry>();
-                                                        connection.recv_packet(packet, tick_manager.as_ref(), component_registry, &mut connection_manager.delta_manager).expect("could not receive packet");
+                                                        connection.recv_packet(payload, tick_manager.as_ref(), component_registry, &mut connection_manager.delta_manager).expect("could not receive packet");
                                                     } else {
                                                         // it's still possible to receive some packets from a client that just disconnected.
                                                         // (multiple packets arrived at the same time from that client)
@@ -247,13 +247,13 @@ pub(crate) fn send(
         });
 
     // SEND_PACKETS: send buffered packets to io
-    let span = trace_span!("send_packets").entered();
+    let span = info_span!("send_packets").entered();
     connection_manager
         .connections
         .iter_mut()
         .try_for_each(|(client_id, connection)| {
             let client_span =
-                trace_span!("send_packets_to_client", client_id = ?client_id).entered();
+                info_span!("send_packets_to_client", client_id = ?client_id).entered();
             let netserver_idx = *netservers
                 .client_server_map
                 .get(client_id)
