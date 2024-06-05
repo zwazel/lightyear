@@ -1,10 +1,8 @@
 use crate::client::io::Io;
-use crate::client::networking::NetworkingState;
-use crate::connection::client::{ConnectionState, NetClient};
-use crate::packet::packet_builder::Payload;
+use crate::connection::client::{ConnectionError, ConnectionState, NetClient};
+use crate::packet::packet_builder::RecvPayload;
 use crate::prelude::ClientId;
 use crate::transport::LOCAL_SOCKET;
-use anyhow::Result;
 use std::net::SocketAddr;
 
 #[derive(Default)]
@@ -23,12 +21,12 @@ impl Client {
 }
 
 impl NetClient for Client {
-    fn connect(&mut self) -> Result<()> {
+    fn connect(&mut self) -> Result<(), ConnectionError> {
         self.is_connected = true;
         Ok(())
     }
 
-    fn disconnect(&mut self) -> Result<()> {
+    fn disconnect(&mut self) -> Result<(), ConnectionError> {
         self.is_connected = false;
         Ok(())
     }
@@ -41,15 +39,15 @@ impl NetClient for Client {
         }
     }
 
-    fn try_update(&mut self, delta_ms: f64) -> Result<()> {
+    fn try_update(&mut self, delta_ms: f64) -> Result<(), ConnectionError> {
         Ok(())
     }
 
-    fn recv(&mut self) -> Option<Payload> {
+    fn recv(&mut self) -> Option<RecvPayload> {
         None
     }
 
-    fn send(&mut self, buf: &[u8]) -> Result<()> {
+    fn send(&mut self, buf: &[u8]) -> Result<(), ConnectionError> {
         Ok(())
     }
 

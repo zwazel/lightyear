@@ -1,42 +1,35 @@
-use anyhow::Context;
-use bevy::app::PreUpdate;
 use bevy::ecs::entity::MapEntities;
 use std::any::TypeId;
 use std::fmt::Debug;
 
 use crate::client::config::ClientConfig;
 use crate::client::message::add_server_to_client_message;
-use crate::prelude::{
-    client, server, AppComponentExt, Channel, ComponentRegistry, RemoteEntityMap,
-    ReplicateResourceMetadata,
-};
-use bevy::prelude::{
-    App, Component, EntityMapper, EventWriter, IntoSystemConfigs, ResMut, Resource, TypePath, World,
-};
-use bevy::reflect::Map;
+use crate::prelude::{client, server};
+use bevy::prelude::{App, Resource, TypePath};
 use bevy::utils::HashMap;
-use bitcode::encoding::Fixed;
-use bitcode::{Decode, Encode};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 use tracing::{debug, error};
 
-use crate::inputs::native::input_buffer::InputMessage;
 use crate::packet::message::Message;
 use crate::prelude::server::ServerConfig;
-use crate::prelude::{ChannelDirection, ChannelKind, MainSet};
-use crate::protocol::component::{ComponentKind, ComponentRegistration};
+use crate::prelude::ChannelDirection;
 use crate::protocol::registry::{NetId, TypeKind, TypeMapper};
 use crate::protocol::serialize::ErasedSerializeFns;
-use crate::protocol::{BitSerializable, EventContext};
-use crate::serialize::bitcode::reader::BitcodeReader;
-use crate::serialize::bitcode::writer::BitcodeWriter;
-use crate::serialize::reader::ReadBuffer;
-use crate::serialize::writer::WriteBuffer;
-use crate::serialize::RawData;
+use crate::serialize::reader::Reader;
+use crate::serialize::writer::Writer;
+use crate::serialize::ToBytes;
 use crate::server::message::add_client_to_server_message;
 use crate::shared::replication::entity_map::EntityMap;
 use crate::shared::replication::resources::DespawnResource;
+
+#[derive(thiserror::Error, Debug)]
+pub enum MessageError {
+    #[error("message is not registered in the protocol")]
+    NotRegistered,
+    #[error("missing serialization functions for message")]
+    MissingSerializationFns,
+    #[error(transparent)]
+    Serialization(#[from] crate::serialize::SerializationError),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum MessageType {
@@ -301,36 +294,38 @@ impl MessageRegistry {
     pub(crate) fn serialize<M: Message>(
         &self,
         message: &M,
-        writer: &mut BitcodeWriter,
-    ) -> anyhow::Result<RawData> {
+        writer: &mut Writer,
+    ) -> Result<(), MessageError> {
         let kind = MessageKind::of::<M>();
         let erased_fns = self
             .serialize_fns_map
             .get(&kind)
-            .context("the message is not part of the protocol")?;
+            .ok_or(MessageError::MissingSerializationFns)?;
         let net_id = self.kind_map.net_id(&kind).unwrap();
-        writer.start_write();
-        writer.encode(net_id, Fixed)?;
+        net_id.to_bytes(writer)?;
         // SAFETY: the ErasedSerializeFns was created for the type M
         unsafe {
             erased_fns.serialize(message, writer)?;
         }
-        Ok(writer.finish_write().to_vec())
+        Ok(())
     }
 
     pub(crate) fn deserialize<M: Message>(
         &self,
-        reader: &mut BitcodeReader,
+        reader: &mut Reader,
         entity_map: &mut EntityMap,
-    ) -> anyhow::Result<M> {
-        let net_id = reader.decode::<NetId>(Fixed)?;
-        let kind = self.kind_map.kind(net_id).context("unknown message kind")?;
+    ) -> Result<M, MessageError> {
+        let net_id = NetId::from_bytes(reader)?;
+        let kind = self
+            .kind_map
+            .kind(net_id)
+            .ok_or(MessageError::NotRegistered)?;
         let erased_fns = self
             .serialize_fns_map
             .get(kind)
-            .context("the message is not part of the protocol")?;
+            .ok_or(MessageError::MissingSerializationFns)?;
         // SAFETY: the ErasedSerializeFns was created for the type M
-        unsafe { erased_fns.deserialize(reader, entity_map) }
+        unsafe { erased_fns.deserialize(reader, entity_map) }.map_err(Into::into)
     }
 }
 
@@ -349,5 +344,28 @@ impl TypeKind for MessageKind {}
 impl From<TypeId> for MessageKind {
     fn from(type_id: TypeId) -> Self {
         Self(type_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::protocol::Resource1;
+
+    #[test]
+    fn test_serde() {
+        let mut registry = MessageRegistry::default();
+        registry.add_message::<Resource1>(MessageType::Normal);
+
+        let message = Resource1(1.0);
+        let mut writer = Writer::default();
+        registry.serialize(&message, &mut writer).unwrap();
+        let data = writer.to_bytes();
+
+        let mut reader = Reader::from(data);
+        let read = registry
+            .deserialize(&mut reader, &mut EntityMap::default())
+            .unwrap();
+        assert_eq!(message, read);
     }
 }

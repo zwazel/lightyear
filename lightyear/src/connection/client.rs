@@ -1,25 +1,26 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+#[cfg(all(feature = "steam", not(target_family = "wasm")))]
+use std::sync::Arc;
 
-use anyhow::Result;
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::{NextState, Reflect, ResMut, Resource};
+use bevy::prelude::{Reflect, Resource};
 use enum_dispatch::enum_dispatch;
+#[cfg(all(feature = "steam", not(target_family = "wasm")))]
+use parking_lot::RwLock;
 
 use crate::client::config::NetcodeConfig;
 use crate::client::io::Io;
-use crate::client::networking::NetworkingState;
 use crate::connection::id::ClientId;
 use crate::connection::netcode::ConnectToken;
 
 #[cfg(all(feature = "steam", not(target_family = "wasm")))]
 use crate::connection::steam::{client::SteamConfig, steamworks_client::SteamworksClient};
-use crate::packet::packet::Packet;
-use crate::packet::packet_builder::Payload;
+use crate::packet::packet_builder::RecvPayload;
 
 use crate::prelude::client::ClientTransport;
-use crate::prelude::{generate_key, Key, LinkConditionerConfig};
+#[cfg(all(feature = "steam", not(target_family = "wasm")))]
+use crate::prelude::LinkConditionerConfig;
+use crate::prelude::{generate_key, Key};
 use crate::transport::config::SharedIoConfig;
 
 #[derive(Debug)]
@@ -35,22 +36,22 @@ pub trait NetClient: Send + Sync {
     // type Error;
 
     /// Connect to server
-    fn connect(&mut self) -> Result<()>;
+    fn connect(&mut self) -> Result<(), ConnectionError>;
 
     /// Disconnect from the server
-    fn disconnect(&mut self) -> Result<()>;
+    fn disconnect(&mut self) -> Result<(), ConnectionError>;
 
     /// Returns the [`ConnectionState`] of the client
     fn state(&self) -> ConnectionState;
 
     /// Update the connection state + internal bookkeeping (keep-alives, etc.)
-    fn try_update(&mut self, delta_ms: f64) -> Result<()>;
+    fn try_update(&mut self, delta_ms: f64) -> Result<(), ConnectionError>;
 
     /// Receive a packet from the server
-    fn recv(&mut self) -> Option<Payload>;
+    fn recv(&mut self) -> Option<RecvPayload>;
 
     /// Send a packet to the server
-    fn send(&mut self, buf: &[u8]) -> Result<()>;
+    fn send(&mut self, buf: &[u8]) -> Result<(), ConnectionError>;
 
     /// Get the id of the client
     fn id(&self) -> ClientId;
@@ -158,15 +159,13 @@ impl NetConfig {
                 config,
                 conditioner,
             } => {
-                // TODO: handle errors
                 let client = super::steam::client::Client::new(
                     steamworks_client.unwrap_or_else(|| {
                         Arc::new(RwLock::new(SteamworksClient::new(config.app_id)))
                     }),
                     config,
                     conditioner,
-                )
-                .expect("could not create steam client");
+                );
                 ClientConnection {
                     client: NetClientDispatch::Steam(client),
                     disconnect_reason: None,
@@ -184,11 +183,11 @@ impl NetConfig {
 }
 
 impl NetClient for ClientConnection {
-    fn connect(&mut self) -> Result<()> {
+    fn connect(&mut self) -> Result<(), ConnectionError> {
         self.client.connect()
     }
 
-    fn disconnect(&mut self) -> Result<()> {
+    fn disconnect(&mut self) -> Result<(), ConnectionError> {
         self.client.disconnect()
     }
 
@@ -196,15 +195,15 @@ impl NetClient for ClientConnection {
         self.client.state()
     }
 
-    fn try_update(&mut self, delta_ms: f64) -> Result<()> {
+    fn try_update(&mut self, delta_ms: f64) -> Result<(), ConnectionError> {
         self.client.try_update(delta_ms)
     }
 
-    fn recv(&mut self) -> Option<Payload> {
+    fn recv(&mut self) -> Option<RecvPayload> {
         self.client.recv()
     }
 
-    fn send(&mut self, buf: &[u8]) -> Result<()> {
+    fn send(&mut self, buf: &[u8]) -> Result<(), ConnectionError> {
         self.client.send(buf)
     }
 
@@ -305,4 +304,28 @@ impl Authentication {
             }
         }
     }
+}
+
+/// Errors related to the client connection
+#[derive(thiserror::Error, Debug)]
+pub enum ConnectionError {
+    #[error("io is not initialized")]
+    IoNotInitialized,
+    #[error("connection not found")]
+    NotFound,
+    #[error("client is not connected")]
+    NotConnected,
+    #[error(transparent)]
+    Transport(#[from] crate::transport::error::Error),
+    #[error("netcode error: {0}")]
+    Netcode(#[from] super::netcode::error::Error),
+    #[error(transparent)]
+    #[cfg(all(feature = "steam", not(target_family = "wasm")))]
+    SteamInvalidHandle(#[from] steamworks::networking_sockets::InvalidHandle),
+    #[error(transparent)]
+    #[cfg(all(feature = "steam", not(target_family = "wasm")))]
+    SteamInvalidState(#[from] steamworks::networking_types::InvalidConnectionState),
+    #[error(transparent)]
+    #[cfg(all(feature = "steam", not(target_family = "wasm")))]
+    SteamError(#[from] steamworks::SteamError),
 }

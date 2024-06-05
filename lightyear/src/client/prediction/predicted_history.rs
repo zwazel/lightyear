@@ -3,14 +3,14 @@
 use std::ops::Deref;
 
 use bevy::prelude::{
-    Commands, Component, DetectChanges, Entity, Or, Query, Ref, RemovedComponents, Res, ResMut,
-    With, Without,
+    Commands, Component, DetectChanges, Entity, Or, Query, Ref, RemovedComponents, Res, With,
+    Without,
 };
-use tracing::{debug, error, info, trace};
+use tracing::{debug, trace};
 
-use crate::client::components::{ComponentSyncMode, Confirmed, SyncComponent, SyncMetadata};
+use crate::client::components::{ComponentSyncMode, Confirmed, SyncComponent};
 use crate::client::prediction::resource::PredictionManager;
-use crate::client::prediction::rollback::{Rollback, RollbackState};
+use crate::client::prediction::rollback::Rollback;
 use crate::client::prediction::Predicted;
 use crate::prelude::{ComponentRegistry, PreSpawnedPlayerObject, ShouldBePredicted, TickManager};
 use crate::shared::tick_manager::Tick;
@@ -132,7 +132,8 @@ pub(crate) fn add_component_history<C: SyncComponent>(
                             commands.get_entity(predicted_entity).unwrap();
                         // map any entities from confirmed to predicted
                         let mut new_component = confirmed_component.deref().clone();
-                        manager.map_entities(&mut new_component, component_registry.as_ref());
+                        let _ =
+                            manager.map_entities(&mut new_component, component_registry.as_ref());
                         match component_registry.prediction_mode::<C>() {
                             ComponentSyncMode::Full => {
                                 // insert history, it will be quickly filled by a rollback (since it starts empty before the current client tick)
@@ -271,7 +272,7 @@ pub(crate) fn apply_confirmed_update<C: SyncComponent>(
                     );
                     // map any entities from confirmed to predicted
                     let mut component = confirmed_component.deref().clone();
-                    manager.map_entities(&mut component, component_registry.as_ref());
+                    let _ = manager.map_entities(&mut component, component_registry.as_ref());
                     *predicted_component = component;
                 }
             }
@@ -290,6 +291,7 @@ pub(crate) fn apply_confirmed_update<C: SyncComponent>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::client::RollbackState;
     use crate::tests::protocol::*;
     use crate::tests::stepper::{BevyStepper, Step};
     use crate::utils::ready_buffer::ItemWithReadyKey;

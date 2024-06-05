@@ -14,6 +14,7 @@ use async_compat::Compat;
 #[cfg(not(target_family = "wasm"))]
 use bevy::tasks::IoTaskPool;
 
+use lightyear::prelude::client::Authentication;
 #[cfg(not(target_family = "wasm"))]
 use lightyear::prelude::client::SteamConfig;
 use lightyear::prelude::client::{Authentication, SocketConfig};

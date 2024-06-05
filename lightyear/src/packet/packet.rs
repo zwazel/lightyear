@@ -1,45 +1,32 @@
 /// Defines the [`Packet`] struct
-use anyhow::Context;
-use bytes::{Buf, Bytes};
-use std::collections::{BTreeMap, HashMap};
-use std::io::Cursor;
-
-use serde::Serialize;
-
-use bitcode::encoding::{Fixed, Gamma};
-
 use crate::connection::netcode::MAX_PACKET_SIZE;
-use crate::packet::header::PacketHeader;
-use crate::packet::message::{FragmentData, MessageAck, ReceiveMessage, SingleData};
-use crate::packet::packet;
+use crate::packet::message::MessageAck;
 use crate::packet::packet_builder::Payload;
-use crate::packet::packet_type::PacketType;
 use crate::protocol::channel::ChannelId;
-use crate::protocol::registry::NetId;
-use crate::protocol::BitSerializable;
-use crate::serialize::reader::ReadBuffer;
-use crate::serialize::varint::VarIntReadExt;
-use crate::serialize::writer::WriteBuffer;
 use crate::serialize::ToBytes;
 use crate::utils::wrapping_id::wrapping_id;
+
+cfg_if::cfg_if!(
+    if #[cfg(test)] {
+        use bytes::Bytes;
+        use crate::serialize::varint::VarIntReadExt;
+        use crate::prelude::PacketError;
+        use crate::packet::header::PacketHeader;
+        use crate::packet::packet_type::PacketType;
+        use crate::packet::message::{SingleData, FragmentData};
+        use bevy::utils::HashMap;
+    }
+);
 
 // Internal id that we assign to each packet sent over the network
 wrapping_id!(PacketId);
 
-/// Maximum number of bytes to write the header
-/// PacketType: 2 bits
-/// Rest: 10 bytes
+/// Number of bytes to write the header
 const HEADER_BYTES: usize = 11;
-/// The maximum of bytes that the payload of the packet can contain (excluding the header)
-/// remove 1 byte for byte alignment at the end
-// TODO: we removed 10 bytes at the end to take some margin, but we should understand why 1 does not work!
-pub(crate) const MTU_PAYLOAD_BYTES: usize = MAX_PACKET_SIZE - HEADER_BYTES - 10;
 
 /// The maximum number of bytes for a message before it is fragmented
-/// The final size of the fragmented packet (channel_net_id: 2, fragment_id: 1, tick: 2, message_id: 2, num_fragments: 1, number of bytes in fragment: 4)
-/// must be lower than MTU_PAYLOAD_BYTES
-/// (might even be 13 in some situations?)
-pub(crate) const FRAGMENT_SIZE: usize = MTU_PAYLOAD_BYTES - 12;
+/// MAX_PACKET_SIZE - HEADER_BYTES - 1 (channel_net_id) - 4 (message_id/fragment_id/num_fragments) - 2 (num bytes in fragment)
+pub(crate) const FRAGMENT_SIZE: usize = MAX_PACKET_SIZE - HEADER_BYTES - 7;
 
 /// Data structure that will help us write the packet
 #[derive(Debug)]
@@ -80,29 +67,29 @@ impl Packet {
     }
 
     /// For tests, parse the packet so that we can inspect the contents
+    /// For production, parse the packets directly into messages to not allocate
+    /// an intermediary data structure
     #[cfg(test)]
     pub(crate) fn parse_packet_payload(
-        &mut self,
-    ) -> anyhow::Result<HashMap<ChannelId, Vec<Bytes>>> {
-        let mut cursor = Cursor::new(&mut self.payload);
+        self,
+    ) -> Result<HashMap<ChannelId, Vec<Bytes>>, PacketError> {
+        let mut cursor = self.payload.into();
         let mut res: HashMap<ChannelId, Vec<Bytes>> = HashMap::new();
-        let header = PacketHeader::from_bytes(&mut cursor).context("could not serialize")?;
+        let header = PacketHeader::from_bytes(&mut cursor)?;
 
         if header.get_packet_type() == PacketType::DataFragment {
             // read the fragment data
-            let channel_id = ChannelId::from_bytes(&mut cursor).context("could not serialize")?;
-            let fragment_data =
-                FragmentData::from_bytes(&mut cursor).context("could not serialize")?;
+            let channel_id = ChannelId::from_bytes(&mut cursor)?;
+            let fragment_data = FragmentData::from_bytes(&mut cursor)?;
             res.entry(channel_id).or_default().push(fragment_data.bytes);
         }
         // read single message data
         // TODO: avoid infinite loop here!
         while cursor.has_remaining() {
-            let channel_id = ChannelId::from_bytes(&mut cursor).context("could not serialize")?;
+            let channel_id = ChannelId::from_bytes(&mut cursor)?;
             let num_messages = cursor.read_varint()?;
             for i in 0..num_messages {
-                let single_data =
-                    SingleData::from_bytes(&mut cursor).context("could not serialize")?;
+                let single_data = SingleData::from_bytes(&mut cursor)?;
                 res.entry(channel_id).or_default().push(single_data.bytes);
             }
         }
@@ -113,19 +100,10 @@ impl Packet {
 #[cfg(test)]
 mod tests {
     use bevy::prelude::{default, Reflect};
-    use bytes::Bytes;
 
-    use bitcode::encoding::Gamma;
     use lightyear_macros::ChannelInternal;
 
-    use crate::packet::message::{FragmentData, MessageId, SingleData};
-    use crate::packet::packet_builder::PacketBuilder;
     use crate::prelude::{ChannelMode, ChannelRegistry, ChannelSettings};
-    use crate::protocol::channel::ChannelKind;
-    use crate::serialize::bitcode::reader::BitcodeReader;
-    use crate::serialize::bitcode::writer::BitcodeWriter;
-
-    use super::*;
 
     #[derive(ChannelInternal, Reflect)]
     struct Channel1;

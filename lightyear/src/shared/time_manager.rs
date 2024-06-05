@@ -18,9 +18,7 @@ use bevy::time::Fixed;
 use bevy::utils::Duration;
 use bevy::utils::Instant;
 use chrono::Duration as ChronoDuration;
-use serde::{Deserialize, Serialize};
 
-use bitcode::{Decode, Encode};
 pub use wrapped_time::WrappedTime;
 
 use crate::prelude::Tick;
@@ -189,15 +187,10 @@ impl TimeManager {
 }
 
 mod wrapped_time {
-    use anyhow::Context;
+    use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 
-    use bitcode::encoding::{Encoding, Fixed};
-    use bitcode::read::Read;
-    use bitcode::write::Write;
-
-    use crate::protocol::BitSerializable;
-    use crate::serialize::reader::ReadBuffer;
-    use crate::serialize::writer::WriteBuffer;
+    use crate::serialize::reader::Reader;
+    use crate::serialize::{SerializationError, ToBytes};
 
     use super::*;
 
@@ -209,39 +202,23 @@ mod wrapped_time {
         pub(crate) elapsed: Duration,
     }
 
-    impl BitSerializable for WrappedTime {
-        fn encode(&self, writer: &mut impl WriteBuffer) -> anyhow::Result<()> {
-            writer
-                .encode(self, Fixed)
-                .context("error encoding WrappedTime")
+    impl ToBytes for WrappedTime {
+        fn len(&self) -> usize {
+            4
         }
 
-        fn decode(reader: &mut impl ReadBuffer) -> anyhow::Result<Self>
+        // NOTE: we only encode the milliseconds up to u32, which is 46 days
+        fn to_bytes<T: WriteBytesExt>(&self, buffer: &mut T) -> Result<(), SerializationError> {
+            let millis: u32 = self.elapsed.as_millis().try_into().unwrap_or(u32::MAX);
+            buffer.write_u32::<NetworkEndian>(millis)?;
+            Ok(())
+        }
+
+        fn from_bytes(buffer: &mut Reader) -> Result<Self, SerializationError>
         where
             Self: Sized,
         {
-            reader
-                .decode::<Self>(Fixed)
-                .context("error decoding WrappedTime")
-        }
-    }
-
-    // NOTE: we only encode the milliseconds up to u32, which is 46 days
-    impl Encode for WrappedTime {
-        const ENCODE_MIN: usize = u32::ENCODE_MIN;
-        const ENCODE_MAX: usize = u32::ENCODE_MAX;
-
-        fn encode(&self, encoding: impl Encoding, writer: &mut impl Write) -> bitcode::Result<()> {
-            let millis: u32 = self.elapsed.as_millis().try_into().unwrap_or(u32::MAX);
-            Encode::encode(&millis, encoding, writer)
-        }
-    }
-    impl Decode for WrappedTime {
-        const DECODE_MIN: usize = u32::DECODE_MIN;
-        const DECODE_MAX: usize = u32::DECODE_MAX;
-
-        fn decode(encoding: impl Encoding, reader: &mut impl Read) -> bitcode::Result<Self> {
-            let millis: u32 = Decode::decode(encoding, reader)?;
+            let millis = buffer.read_u32::<NetworkEndian>()?;
             Ok(Self {
                 elapsed: Duration::from_millis(millis as u64),
             })

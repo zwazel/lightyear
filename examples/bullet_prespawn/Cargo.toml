@@ -18,6 +18,7 @@ lightyear = { path = "../../lightyear", features = [
   "websocket",
   "leafwing",
   "steam",
+  "lz4",
 ] }
 serde = { version = "1.0.188", features = ["derive"] }
 anyhow = { version = "1.0.75", features = [] }
