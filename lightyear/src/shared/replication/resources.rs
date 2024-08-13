@@ -440,10 +440,6 @@ mod tests {
         stepper.server_app.world_mut().resource_mut::<Resource1>().0 = 2.0;
         stepper.frame_step();
         stepper.frame_step();
-        stepper.frame_step();
-        stepper.frame_step();
-        stepper.frame_step();
-        stepper.frame_step();
 
         // check that the update was replicated
         //assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 2.0);
