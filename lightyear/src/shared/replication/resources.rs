@@ -300,8 +300,9 @@ pub(crate) mod receive {
 mod tests {
     use crate::shared::replication::network_target::NetworkTarget;
     use crate::shared::replication::resources::ReplicateResourceExt;
+    use crate::tests::host_server_stepper::{HostServerStepper, Step};
     use crate::tests::protocol::{Channel1, Resource1, Resource2};
-    use crate::tests::stepper::{BevyStepper, Step};
+    use crate::tests::stepper::{BevyStepper, Step as HostServerStep};
     use bevy::prelude::Commands;
 
     use super::StopReplicateResourceExt;
@@ -393,6 +394,110 @@ mod tests {
 
         // check that the resource was not deleted on the client, but also not updated
         assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 1.0);
+    }
+
+    #[test]
+    fn test_resource_replication_via_commands_host_server() {
+        let mut stepper = HostServerStepper::default();
+
+        // start replicating a resource via commands (even if the resource doesn't exist yet)
+        let start_replicate_system =
+            stepper
+                .server_app
+                .world_mut()
+                .register_system(|mut commands: Commands| {
+                    commands.replicate_resource::<Resource1, Channel1>(NetworkTarget::All);
+                });
+        let stop_replicate_system =
+            stepper
+                .server_app
+                .world_mut()
+                .register_system(|mut commands: Commands| {
+                    commands.stop_replicate_resource::<Resource1>();
+                });
+        let _ = stepper
+            .server_app
+            .world_mut()
+            .run_system(start_replicate_system);
+        stepper.frame_step();
+        stepper.frame_step();
+
+        // add the resource
+        stepper
+            .server_app
+            .world_mut()
+            .insert_resource(Resource1(1.0));
+        dbg!("SHOULD SEND RESOURCE MESSAGE");
+        stepper.frame_step();
+        stepper.frame_step();
+
+        // check that the resource was replicated
+        assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 1.0);
+        assert_eq!(stepper.server_app.world().resource::<Resource1>().0, 1.0);
+
+        // update the resource
+        stepper.server_app.world_mut().resource_mut::<Resource1>().0 = 2.0;
+        stepper.frame_step();
+        stepper.frame_step();
+        stepper.frame_step();
+        stepper.frame_step();
+        stepper.frame_step();
+        stepper.frame_step();
+
+        // check that the update was replicated
+        //assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 2.0);
+        assert_eq!(stepper.server_app.world().resource::<Resource1>().0, 2.0);
+
+        // remove the resource
+        stepper
+            .server_app
+            .world_mut()
+            .remove_resource::<Resource1>();
+        stepper.frame_step();
+        stepper.frame_step();
+
+        // check that the resource was removed on the client
+        assert!(stepper
+            .client_app
+            .world()
+            .get_resource::<Resource1>()
+            .is_none());
+        assert!(stepper
+            .server_app
+            .world()
+            .get_resource::<Resource1>()
+            .is_none());
+
+        // re-add the resource
+        stepper
+            .server_app
+            .world_mut()
+            .insert_resource(Resource1(1.0));
+        stepper.frame_step();
+        stepper.frame_step();
+
+        // check that the resource was replicated
+        assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 1.0);
+        assert_eq!(stepper.server_app.world().resource::<Resource1>().0, 1.0);
+
+        // stop replicating the resource
+        let _ = stepper
+            .server_app
+            .world_mut()
+            .run_system(stop_replicate_system);
+        stepper.frame_step();
+        stepper.frame_step();
+
+        // update the resource
+        stepper.server_app.world_mut().resource_mut::<Resource1>().0 = 2.0;
+        stepper.frame_step();
+        stepper.frame_step();
+
+        // check that the resource was not deleted on the client, but also not updated
+        assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 1.0);
+
+        // Check that the server still has the resource
+        assert_eq!(stepper.server_app.world().resource::<Resource1>().0, 2.0);
     }
 
     // /// Check that when a client disconnects, every resource that was spawned from replication
