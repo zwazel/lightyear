@@ -1,7 +1,7 @@
 //! Specify how a Client sends/receives messages with a Server
 use bevy::ecs::component::Tick as BevyTick;
 use bevy::ecs::entity::MapEntities;
-use bevy::prelude::{Mut, Resource, World};
+use bevy::prelude::{Commands, Resource};
 use bevy::utils::{Duration, HashMap};
 use bytes::Bytes;
 use tracing::{debug, trace, trace_span};
@@ -241,7 +241,10 @@ impl ConnectionManager {
     }
 
     /// Send a [`Message`] to the server using a specific [`Channel`]
-    pub fn send_message<C: Channel, M: Message>(&mut self, message: &M) -> Result<(), ClientError> {
+    pub fn send_message<C: Channel, M: Message>(
+        &mut self,
+        message: &mut M,
+    ) -> Result<(), ClientError> {
         self.send_message_to_target::<C, M>(message, NetworkTarget::None)
     }
 
@@ -250,7 +253,7 @@ impl ConnectionManager {
     /// The message will be sent to the server and re-broadcasted to all clients that match the [`NetworkTarget`]
     pub fn send_message_to_target<C: Channel, M: Message>(
         &mut self,
-        message: &M,
+        message: &mut M,
         target: NetworkTarget,
     ) -> Result<(), ClientError> {
         self.erased_send_message_to_target(message, ChannelKind::of::<C>(), target)
@@ -259,7 +262,7 @@ impl ConnectionManager {
     /// Serialize a message and buffer it internally so that it can be sent later
     fn erased_send_message_to_target<M: Message>(
         &mut self,
-        message: &M,
+        message: &mut M,
         channel_kind: ChannelKind,
         target: NetworkTarget,
     ) -> Result<(), ClientError> {
@@ -267,7 +270,11 @@ impl ConnectionManager {
         // NOTE: this is ok to do because most of the time (without rebroadcast, this just adds 1 byte)
         target.to_bytes(&mut self.writer)?;
         // then write the message
-        self.message_registry.serialize(message, &mut self.writer)?;
+        self.message_registry.serialize(
+            message,
+            &mut self.writer,
+            Some(&mut self.replication_receiver.remote_entity_map.local_to_remote),
+        )?;
         let message_bytes = self.writer.split();
 
         // TODO: emit logs/metrics about the message being buffered?
@@ -380,8 +387,9 @@ impl ConnectionManager {
 
     pub(crate) fn receive(
         &mut self,
-        // TODO: use Commands to avoid blocking the world?
-        world: &mut World,
+        commands: &mut Commands,
+        // TODO: pass the `ComponentRegistry`/`MessageRegistry` as arguments instead of storing a copy
+        //  in the `ConnectionManager`
         time_manager: &TimeManager,
         tick_manager: &TickManager,
     ) -> Result<(), ClientError> {
@@ -461,16 +469,14 @@ impl ConnectionManager {
             })?;
 
         if self.sync_manager.is_synced() {
-            world.resource_scope(|world, component_registry: Mut<ComponentRegistry>| {
-                // Check if we have any replication messages we can apply to the World (and emit events)
-                self.replication_receiver.apply_world(
-                    world,
-                    None,
-                    component_registry.as_ref(),
-                    tick_manager.tick(),
-                    &mut self.events,
-                );
-            });
+            // Check if we have any replication messages we can apply to the World (and emit events)
+            self.replication_receiver.apply_world(
+                commands,
+                None,
+                &self.component_registry,
+                tick_manager.tick(),
+                &mut self.events,
+            );
         }
         Ok(())
     }
@@ -539,7 +545,7 @@ impl MessageSend for ConnectionManager {
     type Error = ClientError;
     fn send_message_to_target<C: Channel, M: Message>(
         &mut self,
-        message: &M,
+        message: &mut M,
         target: NetworkTarget,
     ) -> Result<(), ClientError> {
         self.send_message_to_target::<C, M>(message, target)
@@ -547,7 +553,7 @@ impl MessageSend for ConnectionManager {
 
     fn erased_send_message_to_target<M: Message>(
         &mut self,
-        message: &M,
+        message: &mut M,
         channel_kind: ChannelKind,
         target: NetworkTarget,
     ) -> Result<(), ClientError> {
@@ -592,7 +598,7 @@ impl ReplicationSend for ConnectionManager {
 #[cfg(test)]
 mod tests {
     use crate::prelude::{client, server, ClientConnectionManager};
-    use crate::tests::protocol::Message2;
+    use crate::tests::protocol::EntityMessage;
     use crate::tests::stepper::{BevyStepper, Step};
 
     /// Check that we can map entities from the local world to the remote world
@@ -633,7 +639,7 @@ mod tests {
             server_entity
         );
 
-        let mut message = Message2(client_entity);
+        let mut message = EntityMessage(client_entity);
         stepper
             .client_app
             .world_mut()

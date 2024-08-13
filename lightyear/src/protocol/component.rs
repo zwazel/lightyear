@@ -1,31 +1,31 @@
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::entity::MapEntities;
-use std::any::TypeId;
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::ops::{Add, Mul};
-
-use bevy::prelude::{App, Component, EntityWorldMut, Mut, Resource, TypePath, World};
+use bevy::prelude::{App, Commands, Component, Entity, Mut, Resource, TypePath, World};
 use bevy::ptr::Ptr;
 use bevy::utils::HashMap;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::any::TypeId;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::ops::{Add, Mul};
 
 use tracing::{debug, error, trace};
 
 use crate::client::components::ComponentSyncMode;
 use crate::client::config::ClientConfig;
 use crate::client::interpolation::{add_interpolation_systems, add_prepare_interpolation_systems};
-use crate::client::prediction::plugin::add_prediction_systems;
+use crate::client::prediction::plugin::{
+    add_non_networked_rollback_systems, add_prediction_systems,
+};
 use crate::prelude::client::SyncComponent;
 use crate::prelude::server::ServerConfig;
-use crate::prelude::{ChannelDirection, Message, Tick};
+use crate::prelude::{ChannelDirection, ClientId, Message, Tick};
 use crate::protocol::delta::ErasedDeltaFns;
 use crate::protocol::registry::{NetId, TypeKind, TypeMapper};
 use crate::protocol::serialize::{ErasedSerializeFns, SerializeFns};
 use crate::serialize::reader::Reader;
 use crate::serialize::SerializationError;
-use crate::shared::events::connection::ConnectionEvents;
 use crate::shared::replication::delta::{DeltaMessage, Diffable};
 use crate::shared::replication::entity_map::EntityMap;
 
@@ -186,15 +186,16 @@ pub struct InterpolationMetadata {
     pub interpolation: Option<unsafe fn()>,
 }
 
-type RawRemoveFn = fn(&ComponentRegistry, &mut EntityWorldMut);
+type RawRemoveFn = fn(&ComponentRegistry, &mut Commands, Entity);
 type RawWriteFn = fn(
     &ComponentRegistry,
     &mut Reader,
     ComponentNetId,
     Tick,
-    &mut EntityWorldMut,
+    &mut Commands,
+    Entity,
     &mut EntityMap,
-    &mut ConnectionEvents,
+    Option<ClientId>,
 ) -> Result<(), ComponentError>;
 
 /// Function used to interpolate from one component state (`start`) to another (`other`)
@@ -310,8 +311,9 @@ mod serialize {
 
         pub(crate) fn serialize<C: 'static>(
             &self,
-            component: &C,
+            component: &mut C,
             writer: &mut Writer,
+            entity_map: Option<&mut EntityMap>,
         ) -> Result<(), ComponentError> {
             let kind = ComponentKind::of::<C>();
             let erased_fns = self
@@ -323,7 +325,7 @@ mod serialize {
             net_id.to_bytes(writer)?;
             // SAFETY: the ErasedFns corresponds to type C
             unsafe {
-                erased_fns.serialize(component, writer)?;
+                erased_fns.serialize(component, writer, entity_map)?;
             }
             Ok(())
         }
@@ -532,10 +534,13 @@ mod interpolation {
 mod replication {
     use super::*;
     use crate::prelude::{
-        DeltaCompression, DisabledComponent, OverrideTargetComponent, ReplicateOnceComponent,
+        ClientId, DeltaCompression, DisabledComponent, OverrideTargetComponent,
+        ReplicateOnceComponent,
     };
     use crate::serialize::reader::Reader;
     use crate::serialize::ToBytes;
+    use crate::shared::replication::receive::get_connection_events;
+    use bevy::prelude::{Commands, Entity};
 
     impl ComponentRegistry {
         pub(crate) fn set_replication_fns<C: Component + PartialEq>(&mut self, world: &mut World) {
@@ -560,10 +565,11 @@ mod replication {
         pub(crate) fn raw_write(
             &self,
             reader: &mut Reader,
-            entity_world_mut: &mut EntityWorldMut,
+            commands: &mut Commands,
+            entity: Entity,
             tick: Tick,
             entity_map: &mut EntityMap,
-            events: &mut ConnectionEvents,
+            remote_id: Option<ClientId>,
         ) -> Result<(), ComponentError> {
             let net_id = ComponentNetId::from_bytes(reader).map_err(SerializationError::from)?;
             let kind = self
@@ -575,13 +581,7 @@ mod replication {
                 .get(kind)
                 .ok_or(ComponentError::MissingReplicationFns)?;
             (replication_metadata.write)(
-                self,
-                reader,
-                net_id,
-                tick,
-                entity_world_mut,
-                entity_map,
-                events,
+                self, reader, net_id, tick, commands, entity, entity_map, remote_id,
             )
         }
 
@@ -590,31 +590,40 @@ mod replication {
             reader: &mut Reader,
             net_id: ComponentNetId,
             tick: Tick,
-            entity_world_mut: &mut EntityWorldMut,
+            commands: &mut Commands,
+            entity: Entity,
             entity_map: &mut EntityMap,
-            events: &mut ConnectionEvents,
+            remote_id: Option<ClientId>,
         ) -> Result<(), ComponentError> {
             trace!("Writing component {} to entity", std::any::type_name::<C>());
             let component = self.raw_deserialize::<C>(reader, net_id, entity_map)?;
-            let entity = entity_world_mut.id();
-            // TODO: should we send the event based on on the message type (Insert/Update) or based on whether the component was actually inserted?
-            if let Some(mut c) = entity_world_mut.get_mut::<C>() {
-                // only apply the update if the component is different, to not trigger change detection
-                if c.as_ref() != &component {
-                    events.push_update_component(entity, net_id, tick);
-                    *c = component;
+
+            commands.add(move |world: &mut World| {
+                let Some(mut entity_world_mut) = world.get_entity_mut(entity) else {
+                    return;
+                };
+                // TODO: should we send the event based on on the message type (Insert/Update) or based on whether the component was actually inserted?
+                if let Some(mut c) = entity_world_mut.get_mut::<C>() {
+                    // only apply the update if the component is different, to not trigger change detection
+                    if c.as_ref() != &component {
+                        *c = component;
+                        get_connection_events(world, remote_id)
+                            .push_update_component(entity, net_id, tick);
+                    }
+                } else {
+                    entity_world_mut.insert(component);
+                    get_connection_events(world, remote_id)
+                        .push_insert_component(entity, net_id, tick);
                 }
-            } else {
-                events.push_insert_component(entity, net_id, tick);
-                entity_world_mut.insert(component);
-            }
+            });
             Ok(())
         }
 
         pub(crate) fn raw_remove(
             &self,
             net_id: ComponentNetId,
-            entity_world_mut: &mut EntityWorldMut,
+            commands: &mut Commands,
+            entity: Entity,
         ) {
             let kind = self.kind_map.kind(net_id).expect("unknown component kind");
             let replication_metadata = self
@@ -624,11 +633,11 @@ mod replication {
             let f = replication_metadata
                 .remove
                 .expect("the component does not have a remove function");
-            f(self, entity_world_mut);
+            f(self, commands, entity);
         }
 
-        pub(crate) fn remove<C: Component>(&self, entity_world_mut: &mut EntityWorldMut) {
-            entity_world_mut.remove::<C>();
+        pub(crate) fn remove<C: Component>(&self, commands: &mut Commands, entity: Entity) {
+            commands.entity(entity).remove::<C>();
         }
     }
 }
@@ -639,6 +648,7 @@ mod delta {
     use crate::shared::replication::delta::{DeltaComponentHistory, DeltaType};
 
     use crate::serialize::writer::Writer;
+    use crate::shared::replication::receive::get_connection_events;
     use std::ptr::NonNull;
 
     impl ComponentRegistry {
@@ -746,9 +756,10 @@ mod delta {
             reader: &mut Reader,
             net_id: ComponentNetId,
             tick: Tick,
-            entity_world_mut: &mut EntityWorldMut,
+            commands: &mut Commands,
+            entity: Entity,
             entity_map: &mut EntityMap,
-            events: &mut ConnectionEvents,
+            remote_id: Option<ClientId>,
         ) -> Result<(), ComponentError> {
             trace!(
                 "Writing component delta {} to entity",
@@ -757,68 +768,92 @@ mod delta {
             let delta_net_id = self.net_id::<DeltaMessage<C::Delta>>();
             let delta =
                 self.raw_deserialize::<DeltaMessage<C::Delta>>(reader, delta_net_id, entity_map)?;
-            let entity = entity_world_mut.id();
             // TODO: should we send the event based on on the message type (Insert/Update) or based on whether the component was actually inserted?
-            match delta.delta_type {
-                DeltaType::Normal { previous_tick } => {
-                    let Some(mut history) = entity_world_mut.get_mut::<DeltaComponentHistory<C>>()
-                    else {
-                        return Err(ComponentError::DeltaCompressionError(
-                            format!("Entity {entity:?} does not have a ConfirmedHistory<{}>, but we received a diff for delta-compression",
-                                    std::any::type_name::<C>())
-                        ));
-                    };
-                    let Some(past_value) = history.buffer.get(&previous_tick) else {
-                        return Err(ComponentError::DeltaCompressionError(
-                            format!("Entity {entity:?} does not have a value for tick {previous_tick:?} in the ConfirmedHistory<{}>",
-                                    std::any::type_name::<C>())
-                        ));
-                    };
-                    // TODO: is it possible to have one clone instead of 2?
-                    let mut new_value = past_value.clone();
-                    new_value.apply_diff(&delta.delta);
-                    // we can remove all the values strictly older than previous_tick in the component history
-                    // (since we now that server has receive an ack for previous_tick)
-                    history.buffer = history.buffer.split_off(&previous_tick);
-                    // store the new value in the history
-                    history.buffer.insert(tick, new_value.clone());
-                    let Some(mut c) = entity_world_mut.get_mut::<C>() else {
-                        return Err(ComponentError::DeltaCompressionError(
-                            format!("Entity {entity:?} does not have a {} component, but we received a diff for delta-compression",
-                            std::any::type_name::<C>())
-                        ));
-                    };
-                    *c = new_value;
-                    events.push_update_component(entity, net_id, tick);
-                }
-                DeltaType::FromBase => {
-                    let mut new_value = C::base_value();
-                    new_value.apply_diff(&delta.delta);
-                    let value = new_value.clone();
-                    if let Some(mut c) = entity_world_mut.get_mut::<C>() {
-                        // only apply the update if the component is different, to not trigger change detection
-                        if c.as_ref() != &new_value {
-                            *c = new_value;
-                            events.push_update_component(entity, net_id, tick);
+            commands.add(move |world: &mut World| {
+                let Some(mut entity_world_mut) = world.get_entity_mut(entity) else {
+                    return
+                };
+                let mut is_update = false;
+                let mut is_insert = false;
+                match delta.delta_type {
+                    DeltaType::Normal { previous_tick } => {
+                        let Some(mut history) = entity_world_mut.get_mut::<DeltaComponentHistory<C>>()
+                        else {
+                            // TODO: maybe a command that pipes errors somewhere?
+                            error!("Entity {entity:?} does not have a ConfirmedHistory<{}>, but we received a diff for delta-compression",
+                                        std::any::type_name::<C>());
+                            return;
+                            // return Err(ComponentError::DeltaCompressionError(
+                            //     format!("Entity {entity:?} does not have a ConfirmedHistory<{}>, but we received a diff for delta-compression",
+                            //             std::any::type_name::<C>())
+                            // ));
+                        };
+                        let Some(past_value) = history.buffer.get(&previous_tick) else {
+                            error!("Entity {entity:?} does not have a value for tick {previous_tick:?} in the ConfirmedHistory<{}>",
+                                        std::any::type_name::<C>());
+                            return;
+                            // return Err(ComponentError::DeltaCompressionError(
+                            //     format!("Entity {entity:?} does not have a value for tick {previous_tick:?} in the ConfirmedHistory<{}>",
+                            //             std::any::type_name::<C>())
+                            // ));
+                        };
+                        // TODO: is it possible to have one clone instead of 2?
+                        let mut new_value = past_value.clone();
+                        new_value.apply_diff(&delta.delta);
+                        // we can remove all the values strictly older than previous_tick in the component history
+                        // (since we now that server has receive an ack for previous_tick)
+                        history.buffer = history.buffer.split_off(&previous_tick);
+                        // store the new value in the history
+                        history.buffer.insert(tick, new_value.clone());
+                        let Some(mut c) = entity_world_mut.get_mut::<C>() else {
+                            error!("Entity {entity:?} does not have a {} component, but we received a diff for delta-compression",
+                                        std::any::type_name::<C>());
+                            return;
+                            // return Err(ComponentError::DeltaCompressionError(
+                            //     format!("Entity {entity:?} does not have a {} component, but we received a diff for delta-compression",
+                            //             std::any::type_name::<C>())
+                            // ));
+                        };
+                        *c = new_value;
+                        is_update = true;
+                        let events = get_connection_events(world, remote_id);
+                        events.push_update_component(entity, net_id, tick);
+                    }
+                    DeltaType::FromBase => {
+                        let mut new_value = C::base_value();
+                        new_value.apply_diff(&delta.delta);
+                        let value = new_value.clone();
+                        if let Some(mut c) = entity_world_mut.get_mut::<C>() {
+                            // only apply the update if the component is different, to not trigger change detection
+                            if c.as_ref() != &new_value {
+                                *c = new_value;
+                                is_update = true;
+                            }
+                        } else {
+                            entity_world_mut.insert(new_value);
+                            is_insert = true;
                         }
-                    } else {
-                        entity_world_mut.insert(new_value);
-                        events.push_insert_component(entity, net_id, tick);
-                    }
-                    // store the component value in the delta component history, so that we can compute
-                    // diffs from it
-                    if let Some(mut history) =
-                        entity_world_mut.get_mut::<DeltaComponentHistory<C>>()
-                    {
-                        history.buffer.insert(tick, value);
-                    } else {
-                        // create a DeltaComponentHistory and insert the value
-                        let mut history = DeltaComponentHistory::default();
-                        history.buffer.insert(tick, value);
-                        entity_world_mut.insert(history);
+                        // store the component value in the delta component history, so that we can compute
+                        // diffs from it
+                        if let Some(mut history) =
+                            entity_world_mut.get_mut::<DeltaComponentHistory<C>>()
+                        {
+                            history.buffer.insert(tick, value);
+                        } else {
+                            // create a DeltaComponentHistory and insert the value
+                            let mut history = DeltaComponentHistory::default();
+                            history.buffer.insert(tick, value);
+                            entity_world_mut.insert(history);
+                        }
                     }
                 }
-            }
+                let events = get_connection_events(world, remote_id);
+                if is_update {
+                    events.push_update_component(entity, net_id, tick);
+                } else if is_insert {
+                    events.push_insert_component(entity, net_id, tick);
+                }
+            });
             Ok(())
         }
     }
@@ -876,6 +911,9 @@ pub trait AppComponentExt {
         direction: ChannelDirection,
         serialize_fns: SerializeFns<C>,
     ) -> ComponentRegistration<'_, C>;
+
+    /// Enable rollbacks for a component even if the component is not networked
+    fn add_rollback<C: Component + PartialEq + Clone>(&mut self);
 
     /// Enable prediction systems for this component.
     /// You can specify the prediction [`ComponentSyncMode`]
@@ -1059,6 +1097,15 @@ impl AppComponentExt for App {
         }
     }
 
+    // TODO: move this away from protocol? since it doesn't even use the registry at all
+    //  maybe put this in the PredictionPlugin?
+    fn add_rollback<C: Component + PartialEq + Clone>(&mut self) {
+        let is_client = self.world().get_resource::<ClientConfig>().is_some();
+        if is_client {
+            add_non_networked_rollback_systems::<C>(self);
+        }
+    }
+
     fn add_prediction<C: SyncComponent>(&mut self, prediction_mode: ComponentSyncMode) {
         let mut registry = self.world_mut().resource_mut::<ComponentRegistry>();
         registry.set_prediction_mode::<C>(prediction_mode);
@@ -1159,13 +1206,15 @@ mod tests {
     #[test]
     fn test_custom_serde() {
         let mut registry = ComponentRegistry::default();
-        registry.register_component_custom_serde::<Component2>(SerializeFns {
+        registry.register_component_custom_serde::<ComponentSyncModeSimple>(SerializeFns {
             serialize: serialize_component2,
             deserialize: deserialize_component2,
         });
-        let component = Component2(1.0);
+        let mut component = ComponentSyncModeSimple(1.0);
         let mut writer = Writer::default();
-        registry.serialize(&component, &mut writer).unwrap();
+        registry
+            .serialize(&mut component, &mut writer, None)
+            .unwrap();
         let data = writer.to_bytes();
 
         let mut reader = Reader::from(data);

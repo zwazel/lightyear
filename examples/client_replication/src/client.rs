@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::utils::Duration;
+use lightyear::client::input::native::InputSystemSet;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
@@ -246,7 +247,7 @@ pub(crate) fn send_message(
         info!("Send message: {:?}", message);
         // the message will be re-broadcasted by the server to all clients
         client
-            .send_message_to_target::<Channel1, Message1>(&Message1(5), NetworkTarget::All)
+            .send_message_to_target::<Channel1, Message1>(&mut Message1(5), NetworkTarget::All)
             .unwrap_or_else(|e| {
                 error!("Failed to send message: {:?}", e);
             });

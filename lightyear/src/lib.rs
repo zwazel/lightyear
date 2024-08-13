@@ -79,7 +79,7 @@ struct MyMessage;
 struct MyChannel;
 
 fn send_message(mut connection_manager: ResMut<ConnectionManager>) {
-    let _ = connection_manager.send_message_to_target::<MyChannel, MyMessage>(&MyMessage, NetworkTarget::All);
+    let _ = connection_manager.send_message_to_target::<MyChannel, MyMessage>(&mut MyMessage, NetworkTarget::All);
 }
 ```
 
@@ -265,7 +265,7 @@ pub mod prelude {
         };
         #[cfg(feature = "leafwing")]
         pub use crate::client::input::leafwing::LeafwingInputConfig;
-        pub use crate::client::input::native::{InputConfig, InputManager, InputSystemSet};
+        pub use crate::client::input::native::{InputConfig, InputManager};
         pub use crate::client::interpolation::interpolation_history::ConfirmedHistory;
         pub use crate::client::interpolation::plugin::{
             InterpolationConfig, InterpolationDelay, InterpolationSet,

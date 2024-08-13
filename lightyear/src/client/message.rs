@@ -195,7 +195,7 @@ mod tests {
     use super::*;
     use crate::serialize::writer::Writer;
     use crate::tests::host_server_stepper::{HostServerStepper, Step};
-    use crate::tests::protocol::{Channel1, Message1};
+    use crate::tests::protocol::{Channel1, StringMessage};
     use bevy::prelude::{EventReader, Resource, Update};
 
     #[test]
@@ -219,7 +219,7 @@ mod tests {
     /// System to check that we received the message on the server
     fn count_messages(
         mut counter: ResMut<Counter>,
-        mut events: EventReader<crate::server::events::MessageEvent<Message1>>,
+        mut events: EventReader<crate::server::events::MessageEvent<StringMessage>>,
     ) {
         for event in events.read() {
             assert_eq!(event.message().0, "a".to_string());
@@ -228,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn client_send_message_as_host_server() {
+    fn client_send_message_as_host_server_client() {
         // tracing_subscriber::FmtSubscriber::builder()
         //     .with_max_level(tracing::Level::ERROR)
         //     .init();
@@ -242,7 +242,7 @@ mod tests {
             .server_app
             .world_mut()
             .resource_mut::<crate::prelude::client::ConnectionManager>()
-            .send_message::<Channel1, Message1>(&Message1("a".to_string()))
+            .send_message::<Channel1, StringMessage>(&mut StringMessage("a".to_string()))
             .unwrap();
         stepper.frame_step();
         stepper.frame_step();

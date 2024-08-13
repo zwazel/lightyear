@@ -36,9 +36,9 @@
 //! There are several steps to use the `InputPlugin`:
 //! - (optional) read the inputs from an external signal (mouse click or keyboard press, for instance)
 //! - to buffer inputs for each tick. This is done by calling [`add_input`](InputManager::add_input) in a system.
-//! That system must run in the [`InputSystemSet::BufferInputs`] system set, in the `FixedPreUpdate` stage.
+//!   That system must run in the [`InputSystemSet::BufferInputs`] system set, in the `FixedPreUpdate` stage.
 //! - handle inputs in your game logic in systems that run in the `FixedUpdate` schedule. These systems
-//! will read the inputs using the [`InputEvent`] event.
+//!   will read the inputs using the [`InputEvent`] event.
 //!
 //! NOTE: I would advise to activate the `leafwing` feature to handle inputs via the `input_leafwing` module, instead.
 //! That module is more up-to-date and has more features.
@@ -300,7 +300,7 @@ fn prepare_input_message<A: UserAction>(
     //  - buffer an input every frame; and require some redundancy (number of tick per frame)
     //  - or buffer an input only when we are sending, and require more redundancy
     // let message_len = 20 as u16;
-    let message = input_manager
+    let mut message = input_manager
         .input_buffer
         .create_message(tick_manager.tick(), message_len);
     // all inputs are absent
@@ -312,7 +312,7 @@ fn prepare_input_message<A: UserAction>(
             "sending input message: {:?}", message.end_tick
         );
         connection
-            .send_message::<InputChannel, _>(&message)
+            .send_message::<InputChannel, _>(&mut message)
             .unwrap_or_else(|err| {
                 error!("Error while sending input message: {:?}", err);
             })

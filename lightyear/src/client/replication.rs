@@ -142,7 +142,7 @@ pub(crate) mod send {
     /// The bundle is composed of several components:
     /// - [`ReplicateToServer`] to specify if the entity should be replicated to the server or not
     /// - [`ReplicationGroup`] to group entities together for replication. Entities in the same group
-    /// will be sent together in the same message.
+    ///   will be sent together in the same message.
     /// - [`ReplicateHierarchy`] to specify how the hierarchy of the entity should be replicated
     #[derive(Bundle, Clone, Default, PartialEq, Debug, Reflect)]
     pub struct Replicate {
@@ -501,10 +501,8 @@ pub(crate) mod send {
     /// Send component remove
     pub(crate) fn send_component_removed<C: Component>(
         trigger: Trigger<OnRemove, C>,
-        // TODO: despawn/respawn the observers if we are not connected/ready to send?
-        // need to use options because this system could get triggered when those resources don't exist
-        registry: Option<Res<ComponentRegistry>>,
-        sender: Option<ResMut<ConnectionManager>>,
+        registry: Res<ComponentRegistry>,
+        mut sender: ResMut<ConnectionManager>,
         // only remove the component for entities that are being actively replicated
         query: Query<
             (&ReplicationGroup, Has<DisabledComponent<C>>),
@@ -519,14 +517,10 @@ pub(crate) mod send {
             }
             let group_id = group.group_id(Some(entity));
             trace!(?entity, kind = ?std::any::type_name::<C>(), "Sending RemoveComponent");
-            if let Some(registry) = registry {
-                if let Some(mut sender) = sender {
-                    let kind = registry.net_id::<C>();
-                    sender
-                        .replication_sender
-                        .prepare_component_remove(entity, group_id, kind);
-                }
-            }
+            let kind = registry.net_id::<C>();
+            sender
+                .replication_sender
+                .prepare_component_remove(entity, group_id, kind);
         }
     }
 
@@ -542,7 +536,7 @@ pub(crate) mod send {
         use crate::prelude::{
             server, ClientId, DisabledComponent, ReplicateOnceComponent, Replicated, TargetEntity,
         };
-        use crate::tests::protocol::Component1;
+        use crate::tests::protocol::ComponentSyncModeFull;
         use crate::tests::stepper::{BevyStepper, Step, TEST_CLIENT_ID};
 
         #[test]
@@ -760,7 +754,7 @@ pub(crate) mod send {
                 .client_app
                 .world_mut()
                 .entity_mut(client_entity)
-                .insert(Component1(1.0));
+                .insert(ComponentSyncModeFull(1.0));
             for _ in 0..10 {
                 stepper.frame_step();
             }
@@ -771,9 +765,9 @@ pub(crate) mod send {
                     .server_app
                     .world()
                     .entity(server_entity)
-                    .get::<Component1>()
+                    .get::<ComponentSyncModeFull>()
                     .expect("Component missing"),
-                &Component1(1.0)
+                &ComponentSyncModeFull(1.0)
             )
         }
 
@@ -808,7 +802,10 @@ pub(crate) mod send {
                 .client_app
                 .world_mut()
                 .entity_mut(client_entity)
-                .insert((Component1(1.0), DisabledComponent::<Component1>::default()));
+                .insert((
+                    ComponentSyncModeFull(1.0),
+                    DisabledComponent::<ComponentSyncModeFull>::default(),
+                ));
             for _ in 0..10 {
                 stepper.frame_step();
             }
@@ -818,7 +815,7 @@ pub(crate) mod send {
                 .server_app
                 .world()
                 .entity(server_entity)
-                .get::<Component1>()
+                .get::<ComponentSyncModeFull>()
                 .is_none());
         }
 
@@ -832,7 +829,7 @@ pub(crate) mod send {
             let client_entity = stepper
                 .client_app
                 .world_mut()
-                .spawn((Replicate::default(), Component1(1.0)))
+                .spawn((Replicate::default(), ComponentSyncModeFull(1.0)))
                 .id();
             for _ in 0..10 {
                 stepper.frame_step();
@@ -855,7 +852,7 @@ pub(crate) mod send {
                 .client_app
                 .world_mut()
                 .entity_mut(client_entity)
-                .insert(Component1(2.0));
+                .insert(ComponentSyncModeFull(2.0));
             for _ in 0..10 {
                 stepper.frame_step();
             }
@@ -866,9 +863,9 @@ pub(crate) mod send {
                     .server_app
                     .world()
                     .entity(server_entity)
-                    .get::<Component1>()
+                    .get::<ComponentSyncModeFull>()
                     .expect("Component missing"),
-                &Component1(2.0)
+                &ComponentSyncModeFull(2.0)
             )
         }
 
@@ -946,7 +943,7 @@ pub(crate) mod send {
             let client_entity = stepper
                 .client_app
                 .world_mut()
-                .spawn((Replicate::default(), Component1(1.0)))
+                .spawn((Replicate::default(), ComponentSyncModeFull(1.0)))
                 .id();
             for _ in 0..10 {
                 stepper.frame_step();
@@ -968,9 +965,9 @@ pub(crate) mod send {
                     .server_app
                     .world()
                     .entity(server_entity)
-                    .get::<Component1>()
+                    .get::<ComponentSyncModeFull>()
                     .expect("Component missing"),
-                &Component1(1.0)
+                &ComponentSyncModeFull(1.0)
             );
 
             // remove component
@@ -978,7 +975,7 @@ pub(crate) mod send {
                 .client_app
                 .world_mut()
                 .entity_mut(client_entity)
-                .remove::<Component1>();
+                .remove::<ComponentSyncModeFull>();
             for _ in 0..10 {
                 stepper.frame_step();
             }
@@ -988,7 +985,7 @@ pub(crate) mod send {
                 .server_app
                 .world()
                 .entity(server_entity)
-                .get::<Component1>()
+                .get::<ComponentSyncModeFull>()
                 .is_none());
         }
 
@@ -1002,8 +999,8 @@ pub(crate) mod send {
                 .world_mut()
                 .spawn((
                     Replicate::default(),
-                    Component1(1.0),
-                    ReplicateOnceComponent::<Component1>::default(),
+                    ComponentSyncModeFull(1.0),
+                    ReplicateOnceComponent::<ComponentSyncModeFull>::default(),
                 ))
                 .id();
             for _ in 0..10 {
@@ -1027,7 +1024,7 @@ pub(crate) mod send {
                 .client_app
                 .world_mut()
                 .entity_mut(client_entity)
-                .insert(Component1(2.0));
+                .insert(ComponentSyncModeFull(2.0));
             for _ in 0..10 {
                 stepper.frame_step();
             }
@@ -1038,9 +1035,9 @@ pub(crate) mod send {
                     .server_app
                     .world()
                     .entity(server_entity)
-                    .get::<Component1>()
+                    .get::<ComponentSyncModeFull>()
                     .expect("Component missing"),
-                &Component1(1.0)
+                &ComponentSyncModeFull(1.0)
             )
         }
 
@@ -1052,7 +1049,7 @@ pub(crate) mod send {
             let client_entity = stepper
                 .client_app
                 .world_mut()
-                .spawn((Replicate::default(), Component1(1.0)))
+                .spawn((Replicate::default(), ComponentSyncModeFull(1.0)))
                 .id();
             for _ in 0..10 {
                 stepper.frame_step();
@@ -1075,7 +1072,10 @@ pub(crate) mod send {
                 .client_app
                 .world_mut()
                 .entity_mut(client_entity)
-                .insert((Component1(2.0), DisabledComponent::<Component1>::default()));
+                .insert((
+                    ComponentSyncModeFull(2.0),
+                    DisabledComponent::<ComponentSyncModeFull>::default(),
+                ));
             for _ in 0..10 {
                 stepper.frame_step();
             }
@@ -1086,9 +1086,9 @@ pub(crate) mod send {
                     .server_app
                     .world()
                     .entity(server_entity)
-                    .get::<Component1>()
+                    .get::<ComponentSyncModeFull>()
                     .expect("Component missing"),
-                &Component1(1.0)
+                &ComponentSyncModeFull(1.0)
             )
         }
     }

@@ -184,7 +184,7 @@ impl ReplicationSender {
     /// If we got notified that an update got send (included in a packet):
     /// - we reset the accumulated priority to 0.0 for all replication groups included in the message
     /// - we update the replication groups' send_tick
-    /// Then we accumulate the priority for all replication groups.
+    ///   Then we accumulate the priority for all replication groups.
     ///
     /// This should be call after the Send SystemSet.
     #[cfg_attr(feature = "trace", instrument(level = Level::INFO, skip_all))]
@@ -770,7 +770,7 @@ mod tests {
     use crate::prelude::ClientId;
     use crate::server::connection::ConnectionManager;
 
-    use crate::tests::protocol::Component1;
+    use crate::tests::protocol::ComponentSyncModeFull;
     use crate::tests::stepper::{BevyStepper, Step, TEST_CLIENT_ID};
     use bevy::prelude::*;
 
@@ -859,7 +859,7 @@ mod tests {
         let server_entity = stepper
             .server_app
             .world_mut()
-            .spawn((Component1(1.0), Replicate::default()))
+            .spawn((ComponentSyncModeFull(1.0), Replicate::default()))
             .id();
         stepper.frame_step();
 
@@ -868,7 +868,7 @@ mod tests {
             .server_app
             .world_mut()
             .entity_mut(server_entity)
-            .get_mut::<Component1>()
+            .get_mut::<ComponentSyncModeFull>()
             .unwrap()
             .0 = 2.0;
         stepper.frame_step();
