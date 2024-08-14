@@ -78,6 +78,7 @@ impl<R> Default for DespawnResource<R> {
 pub(crate) mod send {
     use super::*;
 
+    use crate::connection::client::{ClientConnection, NetClient};
     use crate::shared::message::MessageSend;
     use bevy::prelude::resource_removed;
     use tracing::trace;
@@ -134,6 +135,7 @@ pub(crate) mod send {
         replication_resource: Option<Res<ReplicateResourceMetadata<R>>>,
         // TODO: support Res<R> by separating MapEntities from non-map-entities?
         mut resource: Option<ResMut<R>>,
+        local_client_connection: Option<Res<ClientConnection>>,
     ) {
         // send the resource to newly connected clients
         let new_clients = connection_manager.new_connected_clients();
@@ -162,6 +164,10 @@ pub(crate) mod send {
                     let mut target = replication_resource.target.clone();
                     // no need to send a duplicate message to new clients
                     target.exclude(&NetworkTarget::Only(new_clients));
+                    // if running in host-server mode, we don't want to replicate the resource to the local client
+                    if let Some(local_client) = local_client_connection.as_ref() {
+                        target.exclude(&NetworkTarget::Single(local_client.client.id()));
+                    }
                     let _ = connection_manager.erased_send_message_to_target(
                         resource.as_mut(),
                         replication_resource.channel,
@@ -299,14 +305,13 @@ pub(crate) mod receive {
 
 #[cfg(test)]
 mod tests {
+    use super::StopReplicateResourceExt;
     use crate::shared::replication::network_target::NetworkTarget;
     use crate::shared::replication::resources::ReplicateResourceExt;
-    use crate::tests::host_server_stepper::{HostServerStepper, Step};
+    use crate::tests::host_server_stepper::HostServerStepper;
     use crate::tests::protocol::{Channel1, Resource1, Resource2};
-    use crate::tests::stepper::{BevyStepper, Step as HostServerStep};
-    use bevy::prelude::{Commands, DetectChanges, Local, Res};
-
-    use super::StopReplicateResourceExt;
+    use crate::tests::stepper::BevyStepper;
+    use bevy::prelude::*;
 
     #[test]
     fn test_resource_replication_via_commands() {
@@ -488,7 +493,6 @@ mod tests {
             if resource.is_changed() {
                 *changes += 1;
             }
-
             *changes
         };
         let change_detection_system_client = stepper
@@ -511,7 +515,6 @@ mod tests {
             .server_app
             .world_mut()
             .insert_resource(Resource1(1.0));
-        dbg!("SHOULD SEND RESOURCE MESSAGE");
         stepper.frame_step();
         stepper.frame_step();
 
@@ -541,6 +544,10 @@ mod tests {
 
         // update the resource
         stepper.server_app.world_mut().resource_mut::<Resource1>().0 = 2.0;
+        stepper.frame_step();
+        stepper.frame_step();
+        stepper.frame_step();
+        stepper.frame_step();
         stepper.frame_step();
         stepper.frame_step();
 
