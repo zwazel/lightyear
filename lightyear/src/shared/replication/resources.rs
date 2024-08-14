@@ -304,7 +304,7 @@ mod tests {
     use crate::tests::host_server_stepper::{HostServerStepper, Step};
     use crate::tests::protocol::{Channel1, Resource1, Resource2};
     use crate::tests::stepper::{BevyStepper, Step as HostServerStep};
-    use bevy::prelude::Commands;
+    use bevy::prelude::{Commands, DetectChanges, Local, Res};
 
     use super::StopReplicateResourceExt;
 
@@ -327,6 +327,15 @@ mod tests {
                 .register_system(|mut commands: Commands| {
                     commands.stop_replicate_resource::<Resource1>();
                 });
+        let change_detection_system = stepper.client_app.world_mut().register_system(
+            |resource: Res<Resource1>, mut changes: Local<u32>| -> u32 {
+                if resource.is_changed() {
+                    *changes += 1;
+                }
+
+                *changes
+            },
+        );
         let _ = stepper
             .server_app
             .world_mut()
@@ -346,6 +355,17 @@ mod tests {
         // check that the resource was replicated
         assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 1.0);
 
+        // Check that we got a change detection
+        assert_eq!(
+            stepper
+                .client_app
+                .world_mut()
+                .run_system(change_detection_system)
+                .ok()
+                .unwrap(),
+            1
+        );
+
         // update the resource
         stepper.server_app.world_mut().resource_mut::<Resource1>().0 = 2.0;
         stepper.frame_step();
@@ -353,6 +373,17 @@ mod tests {
 
         // check that the update was replicated
         assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 2.0);
+
+        // Check that we got a change detection
+        assert_eq!(
+            stepper
+                .client_app
+                .world_mut()
+                .run_system(change_detection_system)
+                .ok()
+                .unwrap(),
+            2
+        );
 
         // remove the resource
         stepper
@@ -442,7 +473,7 @@ mod tests {
         stepper.frame_step();
 
         // check that the update was replicated
-        //assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 2.0);
+        assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 2.0);
         assert_eq!(stepper.server_app.world().resource::<Resource1>().0, 2.0);
 
         // remove the resource
