@@ -385,6 +385,19 @@ mod tests {
             2
         );
 
+        // Check that we didn't get a new change detection
+        stepper.frame_step();
+        stepper.frame_step();
+        assert_eq!(
+            stepper
+                .client_app
+                .world_mut()
+                .run_system(change_detection_system)
+                .ok()
+                .unwrap(),
+            2
+        );
+
         // remove the resource
         stepper
             .server_app
@@ -411,6 +424,19 @@ mod tests {
         // check that the resource was replicated
         assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 1.0);
 
+        // Check that we got a change detection
+        stepper.frame_step();
+        stepper.frame_step();
+        assert_eq!(
+            stepper
+                .client_app
+                .world_mut()
+                .run_system(change_detection_system)
+                .ok()
+                .unwrap(),
+            3
+        );
+
         // stop replicating the resource
         let _ = stepper
             .server_app
@@ -426,6 +452,17 @@ mod tests {
 
         // check that the resource was not deleted on the client, but also not updated
         assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 1.0);
+
+        // Check that we didn't get a new change detection
+        assert_eq!(
+            stepper
+                .client_app
+                .world_mut()
+                .run_system(change_detection_system)
+                .ok()
+                .unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -447,6 +484,21 @@ mod tests {
                 .register_system(|mut commands: Commands| {
                     commands.stop_replicate_resource::<Resource1>();
                 });
+        let change_detection_closure = |resource: Res<Resource1>, mut changes: Local<u32>| -> u32 {
+            if resource.is_changed() {
+                *changes += 1;
+            }
+
+            *changes
+        };
+        let change_detection_system_client = stepper
+            .client_app
+            .world_mut()
+            .register_system(change_detection_closure);
+        let change_detection_system_server = stepper
+            .server_app
+            .world_mut()
+            .register_system(change_detection_closure);
         let _ = stepper
             .server_app
             .world_mut()
@@ -467,14 +519,59 @@ mod tests {
         assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 1.0);
         assert_eq!(stepper.server_app.world().resource::<Resource1>().0, 1.0);
 
+        // Check that we got a change detection
+        assert_eq!(
+            stepper
+                .client_app
+                .world_mut()
+                .run_system(change_detection_system_client)
+                .ok()
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            stepper
+                .server_app
+                .world_mut()
+                .run_system(change_detection_system_server)
+                .ok()
+                .unwrap(),
+            1
+        );
+
         // update the resource
         stepper.server_app.world_mut().resource_mut::<Resource1>().0 = 2.0;
         stepper.frame_step();
         stepper.frame_step();
 
+        dbg!(
+            "CLIENT RESOURCE: {:?}",
+            stepper.client_app.world().resource::<Resource1>()
+        );
+
         // check that the update was replicated
         assert_eq!(stepper.client_app.world().resource::<Resource1>().0, 2.0);
         assert_eq!(stepper.server_app.world().resource::<Resource1>().0, 2.0);
+
+        // Check that we got a change detection
+        assert_eq!(
+            stepper
+                .client_app
+                .world_mut()
+                .run_system(change_detection_system_client)
+                .ok()
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            stepper
+                .server_app
+                .world_mut()
+                .run_system(change_detection_system_server)
+                .ok()
+                .unwrap(),
+            2
+        );
 
         // remove the resource
         stepper
