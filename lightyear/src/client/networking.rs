@@ -78,7 +78,8 @@ impl Plugin for ClientNetworkingPlugin {
             )
             .add_systems(
                 PreUpdate,
-                (listen_io_state, receive).in_set(InternalMainSet::<ClientMarker>::Receive),
+                (listen_io_state, (receive_packets, receive).chain())
+                    .in_set(InternalMainSet::<ClientMarker>::Receive),
             )
             // TODO: make HostServer a computed state?
             .add_systems(
@@ -100,14 +101,17 @@ impl Plugin for ClientNetworkingPlugin {
         // CONNECTED
         app.add_systems(
             OnEnter(NetworkingState::Connected),
-            (on_connect, on_connect_host_server.run_if(is_host_server)),
+            (
+                on_connect.run_if(not(is_host_server)),
+                on_connect_host_server.run_if(is_host_server),
+            ),
         );
 
         // DISCONNECTED
         app.add_systems(
             OnEnter(NetworkingState::Disconnected),
             (
-                on_disconnect,
+                on_disconnect.run_if(not(is_host_server)),
                 on_disconnect_host_server.run_if(is_host_server),
             ),
         );
@@ -125,8 +129,7 @@ impl Plugin for ClientNetworkingPlugin {
     }
 }
 
-pub(crate) fn receive(
-    mut commands: Commands,
+pub(crate) fn receive_packets(
     mut connection: ResMut<ConnectionManager>,
     state: Res<State<NetworkingState>>,
     mut next_state: ResMut<NextState<NetworkingState>>,
@@ -178,11 +181,27 @@ pub(crate) fn receive(
             .recv_packet(packet, tick_manager.as_ref(), component_registry.as_ref())
             .unwrap();
     }
-    // RECEIVE: receive packets from message managers
-    let _ = connection
-        .receive(&mut commands, time_manager.as_ref(), tick_manager.as_ref())
+}
+
+/// Read from internal buffers and apply the changes to the world
+pub(crate) fn receive(world: &mut World) {
+    let unsafe_world = world.as_unsafe_world_cell();
+
+    // TODO: an alternative would be to use `Commands + EntityMut` which both don't conflict with resources
+    // SAFETY: we guarantee that the `world` is not used in `connection_manager.receive` to update
+    //  these resources
+    let mut connection_manager =
+        unsafe { unsafe_world.get_resource_mut::<ConnectionManager>() }.unwrap();
+    let time_manager = unsafe { unsafe_world.get_resource::<TimeManager>() }.unwrap();
+    let tick_manager = unsafe { unsafe_world.get_resource::<TickManager>() }.unwrap();
+    // RECEIVE: read messages and parse them into events
+    let _ = connection_manager
+        .receive(
+            unsafe { unsafe_world.world_mut() },
+            time_manager,
+            tick_manager,
+        )
         .inspect_err(|e| error!("Error receiving packets: {}", e));
-    trace!("client finished recv");
 }
 
 pub(crate) fn send(

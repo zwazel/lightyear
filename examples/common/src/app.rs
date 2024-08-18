@@ -26,7 +26,7 @@ use lightyear::transport::LOCAL_SOCKET;
 use serde::{Deserialize, Serialize};
 
 use crate::settings::*;
-use crate::shared::{shared_config, SERVER_REPLICATION_INTERVAL};
+use crate::shared::{shared_config, REPLICATION_INTERVAL};
 
 /// CLI options to create an [`App`]
 #[derive(Parser, PartialEq, Debug)]
@@ -361,6 +361,10 @@ fn client_app(settings: Settings, net_config: client::NetConfig) -> (App, Client
     let client_config = ClientConfig {
         shared: shared_config(Mode::Separate),
         net: net_config,
+        replication: ReplicationConfig {
+            send_interval: REPLICATION_INTERVAL,
+            ..default()
+        },
         ..default()
     };
     (app, client_config)
@@ -398,7 +402,7 @@ fn server_app(
         shared: shared_config(Mode::Separate),
         net: net_configs,
         replication: ReplicationConfig {
-            send_interval: SERVER_REPLICATION_INTERVAL,
+            send_interval: REPLICATION_INTERVAL,
             ..default()
         },
         ..default()
@@ -419,9 +423,9 @@ fn combined_app(
         filter: "wgpu=error,bevy_render=info,bevy_ecs=warn".to_string(),
         ..default()
     }));
-    // if settings.client.inspector {
-    //     app.add_plugins(WorldInspectorPlugin::new());
-    // }
+    if settings.client.inspector {
+        app.add_plugins(WorldInspectorPlugin::new());
+    }
 
     // server config
     let mut net_configs = get_server_net_configs(&settings);
@@ -433,7 +437,7 @@ fn combined_app(
         shared: shared_config(Mode::HostServer),
         net: net_configs,
         replication: ReplicationConfig {
-            send_interval: SERVER_REPLICATION_INTERVAL,
+            send_interval: REPLICATION_INTERVAL,
             ..default()
         },
         ..default()

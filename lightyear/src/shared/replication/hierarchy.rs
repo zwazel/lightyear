@@ -1,13 +1,15 @@
 //! This module is responsible for making sure that parent-children hierarchies are replicated correctly.
-use crate::client::prediction::pre_prediction::PrePredictionSet;
 use crate::client::replication::send::ReplicateToServer;
 use bevy::ecs::entity::MapEntities;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::prelude::server::ControlledBy;
-use crate::prelude::{MainSet, NetworkRelevanceMode, PrePredicted, Replicating, ReplicationGroup};
+use crate::prelude::{
+    MainSet, NetworkRelevanceMode, PrePredicted, Replicated, Replicating, ReplicationGroup,
+};
 use crate::server::replication::send::SyncTarget;
+use crate::shared::replication::authority::{AuthorityPeer, HasAuthority};
 use crate::shared::replication::components::{ReplicateHierarchy, ReplicationTarget};
 use crate::shared::replication::{ReplicationPeer, ReplicationSend};
 use crate::shared::sets::{InternalMainSet, InternalReplicationSet};
@@ -56,6 +58,9 @@ impl<R: ReplicationSend> HierarchySendPlugin<R> {
                 Option<&SyncTarget>,
                 Option<&ControlledBy>,
                 Option<&NetworkRelevanceMode>,
+                Option<&HasAuthority>,
+                Option<&AuthorityPeer>,
+                Has<Replicated>,
             ),
             (
                 Without<Parent>,
@@ -75,6 +80,9 @@ impl<R: ReplicationSend> HierarchySendPlugin<R> {
             sync_target,
             controlled_by,
             visibility_mode,
+            has_authority,
+            authority_peer,
+            is_replicated,
         ) in parent_query.iter()
         {
             if replicate_hierarchy.recursive {
@@ -96,12 +104,13 @@ impl<R: ReplicationSend> HierarchySendPlugin<R> {
                         ParentSync(None),
                     ));
                     // On the client, we want to add the PrePredicted component to the children
-                    // The `client_entity` will be filled in a PrePrediction system
-                    // On the server, we just send the PrePredicted component as is to the client
+                    // the PrePredicted observer will spawn a corresponding Confirmed entity.
+                    //
+                    // On the server, we just send the PrePredicted component as is to the client,
+                    // (we don't want to overwrite the PrePredicted component on the server)
                     if let Some(pre_predicted) = pre_predicted {
-                        // only insert on the child if the client_entity is None (which means we
-                        // are on the client)
-                        if pre_predicted.client_entity.is_none() {
+                        // only insert on the child if we are on the client
+                        if !is_replicated {
                             commands.entity(child).insert(PrePredicted::default());
                         }
                     }
@@ -119,6 +128,12 @@ impl<R: ReplicationSend> HierarchySendPlugin<R> {
                     }
                     if let Some(vis) = visibility_mode {
                         commands.entity(child).insert(*vis);
+                    }
+                    if let Some(has_authority) = has_authority {
+                        commands.entity(child).insert(*has_authority);
+                    }
+                    if let Some(authority_peer) = authority_peer {
+                        commands.entity(child).insert(*authority_peer);
                     }
                 }
             }
@@ -164,11 +179,7 @@ impl<R: ReplicationSend> Plugin for HierarchySendPlugin<R> {
         app.observe(Self::handle_parent_remove);
         app.add_systems(
             PostUpdate,
-            (
-                // we copy PrePredicted to children before we set the correct value of the PrePredicted entity
-                Self::propagate_replicate.before(PrePredictionSet::Fill),
-                Self::update_parent_sync,
-            )
+            (Self::propagate_replicate, Self::update_parent_sync)
                 .chain()
                 // we don't need to run these every frame, only every send_interval
                 .in_set(InternalReplicationSet::<R::SetMarker>::SendMessages)
