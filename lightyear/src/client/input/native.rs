@@ -48,7 +48,6 @@ use bevy::reflect::Reflect;
 use bevy::utils::Duration;
 use tracing::{debug, error, trace};
 
-use crate::channel::builder::InputChannel;
 use crate::client::config::ClientConfig;
 use crate::client::connection::ConnectionManager;
 use crate::client::events::InputEvent;
@@ -56,11 +55,14 @@ use crate::client::prediction::plugin::is_in_rollback;
 use crate::client::prediction::rollback::Rollback;
 use crate::client::run_conditions::is_synced;
 use crate::client::sync::SyncSet;
+use crate::connection::client::NetClient;
+use crate::connection::client::NetClientDispatch;
 use crate::inputs::native::input_buffer::InputBuffer;
 use crate::inputs::native::UserAction;
 use crate::prelude::{is_host_server, ChannelKind, ChannelRegistry, Tick, TickManager};
 use crate::shared::sets::{ClientMarker, InternalMainSet};
 use crate::shared::tick_manager::TickEvent;
+use crate::{channel::builder::InputChannel, prelude::client::ClientConnection};
 
 #[derive(Debug, Clone, Copy, Reflect)]
 pub struct InputConfig {
@@ -331,10 +333,61 @@ fn prepare_input_message<A: UserAction>(
 /// inputs through the network, we just send directly to the server's InputEvents
 fn send_input_directly_to_client_events<A: UserAction>(
     tick_manager: Res<TickManager>,
+    client: Res<ClientConnection>,
     mut input_manager: ResMut<InputManager<A>>,
-    mut client_input_events: EventWriter<InputEvent<A>>,
+    mut server_input_events: EventWriter<crate::server::events::InputEvent<A>>,
 ) {
-    let tick = tick_manager.tick();
-    let input = input_manager.input_buffer.pop(tick);
-    client_input_events.send(InputEvent::new(input, ()));
+    if let NetClientDispatch::Local(client) = &client.client {
+        let tick = tick_manager.tick();
+        let input = input_manager.input_buffer.pop(tick);
+        let event = crate::server::events::InputEvent::new(input, client.id());
+        server_input_events.send(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::client::input::native::InputSystemSet;
+    use crate::prelude::client::InputManager;
+    use crate::prelude::{server, TickManager};
+    use crate::tests::host_server_stepper::HostServerStepper;
+    use crate::tests::protocol::MyInput;
+    use bevy::prelude::*;
+
+    fn press_input(
+        mut input_manager: ResMut<InputManager<MyInput>>,
+        tick_manager: Res<TickManager>,
+    ) {
+        input_manager.add_input(MyInput(2), tick_manager.tick());
+    }
+
+    #[derive(Resource)]
+    pub struct Counter(pub u32);
+
+    fn receive_input(
+        mut counter: ResMut<Counter>,
+        mut input: EventReader<server::InputEvent<MyInput>>,
+    ) {
+        for input in input.read() {
+            assert_eq!(input.input().unwrap(), MyInput(2));
+            counter.0 += 1;
+        }
+    }
+
+    /// Check that in host-server mode the native client inputs from the buffer
+    /// are forwarded directly to the server's InputEvents
+    #[test]
+    fn test_host_server_input() {
+        let mut stepper = HostServerStepper::default_no_init();
+        stepper.server_app.world_mut().insert_resource(Counter(0));
+        stepper.server_app.add_systems(
+            FixedPreUpdate,
+            press_input.in_set(InputSystemSet::BufferInputs),
+        );
+        stepper.server_app.add_systems(FixedUpdate, receive_input);
+        stepper.init();
+
+        stepper.frame_step();
+        assert!(stepper.server_app.world().resource::<Counter>().0 > 0);
+    }
 }
